@@ -1,0 +1,7 @@
+psycopg2-binary==2.9.9
+requests==2.31.0
+python-telegram-bot==13.15
+python-dotenv==1.0.0
+pandas==2.1.0
+numpy==1.26.0
+schedule==1.2.0 
