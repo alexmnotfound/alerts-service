@@ -1,4 +1,4 @@
-# Crypto Alerts Service
+# Crypto Alerts Service (Work In Progress)
 
 A service that monitors cryptocurrency prices, reads OHLC and technical indicators from a PostgreSQL database, fetches OHLC data from the Binance public API (v3) at regular intervals, and sends alerts via Telegram when specific conditions are met.
 
