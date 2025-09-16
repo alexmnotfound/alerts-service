@@ -1,0 +1,9 @@
+version: '3'
+
+services:
+  alerts-service:
+    build: .
+    env_file: .env
+    volumes:
+      - .:/app
+    # Removed ohlc-api dependency since it's already running externally 
