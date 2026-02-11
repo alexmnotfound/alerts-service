@@ -1,49 +1,27 @@
 #!/usr/bin/env python3
-import os
-import asyncio
-from telegram import Bot
+"""Send the real alert message format to Telegram (for testing). Uses notifier only."""
 
-# Load .env file
+import os
+
 def load_env():
     try:
-        with open('.env', 'r') as f:
+        with open(".env") as f:
             for line in f:
-                if '=' in line and not line.startswith('#'):
-                    key, value = line.strip().split('=', 1)
-                    os.environ[key] = value
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.strip().split("=", 1)
+                    os.environ[k] = v
     except FileNotFoundError:
         pass
 
+
 load_env()
 
-async def test_telegram():
-    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-    chat_id = os.getenv('TELEGRAM_CHAT_ID')
-    
-    print(f"Bot Token: {bot_token}")
-    print(f"Chat ID: {chat_id}")
-    
-    if not bot_token or not chat_id:
-        print("❌ Missing credentials!")
-        return
-    
-    try:
-        bot = Bot(token=bot_token)
-        
-        # Test bot info
-        bot_info = await bot.get_me()
-        print(f"✅ Bot connected: @{bot_info.username}")
-        
-        # Test sending message
-        message = await bot.send_message(chat_id=chat_id, text="🧪 Test message from alerts service!")
-        print(f"✅ Message sent successfully! Message ID: {message.message_id}")
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        print("\nTroubleshooting tips:")
-        print("1. Make sure you've sent /start to your bot")
-        print("2. Check if the chat ID is correct")
-        print("3. For group chats, make sure the bot is added to the group")
-
 if __name__ == "__main__":
-    asyncio.run(test_telegram())
+    from notifier.notifier import send_test_format_alert
+
+    if not os.getenv("TELEGRAM_BOT_TOKEN") or not os.getenv("TELEGRAM_CHAT_ID"):
+        print("❌ Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env")
+        exit(1)
+    print("Sending real-format test alert...")
+    send_test_format_alert()
+    print("✅ Done. Check Telegram.")

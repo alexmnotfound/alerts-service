@@ -1,9 +1,21 @@
-version: '3'
+version: "3"
 
 services:
   alerts-service:
     build: .
     env_file: .env
-    volumes:
-      - .:/app
-    # Removed ohlc-api dependency since it's already running externally 
+    environment:
+      - DB_HOST=${DB_HOST:-localhost}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-ohlc}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - OHLC_API_BASE_URL=${OHLC_API_BASE_URL:-http://localhost:8000}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - HOURLY_CHECK_INTERVAL=${HOURLY_CHECK_INTERVAL:-3600}
+      - RETRY_INTERVAL=${RETRY_INTERVAL:-30}
+      - STALE_DATA_SECONDS=${STALE_DATA_SECONDS:-7200}
+    # For production on DonWeb: remove the volume below so the image runs as built
+    # volumes:
+    #   - .:/app
