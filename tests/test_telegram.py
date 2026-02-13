@@ -3,6 +3,7 @@
 
 import os
 
+
 def load_env():
     try:
         with open(".env") as f:
@@ -17,7 +18,7 @@ def load_env():
 load_env()
 
 if __name__ == "__main__":
-    from notifier.notifier import send_test_format_alert
+    from alerts_service.notifier.notifier import send_test_format_alert
 
     if not os.getenv("TELEGRAM_BOT_TOKEN") or not os.getenv("TELEGRAM_CHAT_ID"):
         print("❌ Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env")

@@ -5,20 +5,20 @@ PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
 run: install
-	$(PYTHON) monitor.py
+	$(PYTHON) -m alerts_service
 
 install:
 	[ -d $(VENV) ] || python3 -m venv $(VENV)
 	$(PIP) install -r requirements.txt
 
 run-bare:
-	$(PYTHON) monitor.py
+	$(PYTHON) -m alerts_service
 
 test-telegram: install
-	$(PYTHON) test_telegram.py
+	PYTHONPATH=. $(PYTHON) tests/test_telegram.py
 
 test-alerts-range: install
-	$(PYTHON) test_alerts_range.py --start 2026-02-10 --end 2026-02-11
+	PYTHONPATH=. $(PYTHON) tests/test_alerts_range.py --start 2026-02-10 --end 2026-02-11
 
 docker-build:
 	docker compose build

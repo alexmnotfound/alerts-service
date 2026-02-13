@@ -3,9 +3,9 @@
 Run alert rules over a range of timestamps using historical DB data.
 For each candle in the range, uses that candle's OHLC as "current" and runs all rules.
 
-Usage:
-  python test_alerts_range.py --start 2025-01-01 --end 2025-01-31
-  python test_alerts_range.py --ticker ETHUSDT --timeframe 4h --start 2025-01-01 --end 2025-01-15 --limit 200
+Usage (from project root):
+  python tests/test_alerts_range.py --start 2025-01-01 --end 2025-01-31
+  python tests/test_alerts_range.py --ticker ETHUSDT --timeframe 4h --start 2025-01-01 --end 2025-01-15 --limit 200
 
 Dates are UTC (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS).
 """
@@ -15,7 +15,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
-# Load .env
+
 def _load_env():
     try:
         with open(".env") as f:
@@ -29,9 +29,9 @@ def _load_env():
 
 _load_env()
 
-from db import fetch_candles_with_indicators, check_connection
-from alerts.rules import run_all
-from config import TICKERS, TIMEFRAMES, format_utc_for_display
+from alerts_service.db import fetch_candles_with_indicators, check_connection
+from alerts_service.alerts.rules import run_all
+from alerts_service.config import TICKERS, TIMEFRAMES, format_utc_for_display
 
 
 def parse_ts(s: str) -> datetime:
