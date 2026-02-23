@@ -1,6 +1,6 @@
 # Alerts Service
 
-Monitors cryptocurrency tickers using OHLC and technical indicators from the same PostgreSQL database as the OHLC Handler. When conditions are met (e.g. pivot levels, EMA touches/crosses), it sends alerts to Telegram. Runs in a loop; when data is missing or stale it triggers the OHLC Handler API to update.
+Monitors cryptocurrency tickers using OHLC and technical indicators from the same PostgreSQL database as the OHLC Handler. When conditions are met (e.g. pivot levels, EMA touches/crosses, candle patterns), it sends alerts to Telegram. Runs in a loop with two types of processing: **price pass** (1H every 5 min: pivot + EMA) and **candle-pattern pass** (all timeframes, only in the 1‑minute window after each candle close). When data is missing or stale it triggers the OHLC Handler API to update.
 
 ## Architecture
 
@@ -23,8 +23,9 @@ Monitors cryptocurrency tickers using OHLC and technical indicators from the sam
 | `OHLC_API_BASE_URL` | OHLC Handler base URL | `http://localhost:8000` |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token | *(required for alerts)* |
 | `TELEGRAM_CHAT_ID` | Chat ID for alerts | *(required for alerts)* |
-| `CHECK_INTERVAL` | Seconds between full checks (Binance price + rules). Shorter = faster alerts. | `300` (5 min) |
+| `CHECK_INTERVAL` | Seconds between **price pass** (1H pivot + EMA). | `300` (5 min) |
 | `HOURLY_CHECK_INTERVAL` | Legacy alias for `CHECK_INTERVAL` | same |
+| `CANDLE_PATTERN_CHECK_INTERVAL` | Seconds between candle-pattern checks (1 min after close). | `60` |
 | `RETRY_INTERVAL` | Seconds before retry on error | `30` |
 | `STALE_DATA_SECONDS` | Fallback max age (seconds) for “stale” when timeframe is unknown. Per-timeframe defaults in code: 1h→2h, 4h→8h, 1d→2d, 1w→14d, 1M→60d. | `7200` |
 
@@ -86,13 +87,20 @@ make run
 
 Or `make install` then `make run-bare`. Set env vars or use `.env`.
 
+## Processing: two passes
+
+- **Price pass (1H, every `CHECK_INTERVAL`):** Runs only for 1H. Rules: **monthly pivot** and **EMA 50/200**. Fetches latest 1H candle + indicators from DB and current OHLC from Binance, runs `run_price_rules()`, applies cooldown, sends one consolidated message per ticker if any alert fires.
+- **Candle-pattern pass (all timeframes, every `CANDLE_PATTERN_CHECK_INTERVAL`):** For each timeframe we only run when **within 1 minute after that timeframe’s candle close** (e.g. 1H at :01, 4H at :01 after 4h close, 1d at 00:01 UTC, etc.). Rules: **Doji** (and any future candle-pattern rules). Fetches candle + current OHLC, runs `run_candle_pattern_rules()`, Doji dedupe, cooldown, sends.
+
+So: pivot and EMA fire on 1H every 5 minutes; Doji (and other candle patterns) fire only once per closed candle, in the 1‑minute window after close for each timeframe.
+
 ## Alert rules
 
 - **Current price** is always from Binance (live). **Indicators** (pivot, RSI, OBV, candle_pattern, etc.) are the **fixed values from the last closed candle** per timeframe (1H, 4H, etc.) in the DB. Each timeframe is evaluated separately: we compare current price to that timeframe’s indicator values.
 
-1. **Monthly pivot** – Current price (Binance) within 2% of any monthly pivot level (PP, R1–R5, S1–S5). Configurable via `PIVOT_THRESHOLD` in `alerts_service/config.py`.
-2. **Doji** – The **last closed candle** (for that timeframe) has Doji pattern (from DB). Evaluated at close only; we alert at most once per closed candle.
-3. **EMA50 / EMA200** – Current price touches or crosses EMA 50 or 200. **Only on 4h, 1d, 1M** (not 1h or 1w). Uses fixed EMA from last closed candle for that timeframe.
+1. **Monthly pivot** – Current price (Binance) within 2% of any monthly pivot level (PP, R1–R5, S1–S5). **Price pass only, 1H.** Configurable via `PIVOT_THRESHOLD` in `alerts_service/config.py`.
+2. **Doji** – The candle that **just closed** (for that timeframe) has Doji pattern. **Candle-pattern pass only:** fires only in the **1‑minute window after candle close** for each timeframe (1h, 4h, 1d, 1w, 1M). See `CANDLE_PATTERN_GRACE_AFTER_CLOSE` in config.
+3. **EMA50 / EMA200** – Current price touches or crosses EMA 50 or 200. **Price pass only, 1H** (rule is defined for 1h, 4h, 1d, 1M but the service only runs price rules on 1H every 5 min). Uses fixed EMA from last closed candle.
 
 When you add more indicators (e.g. OBV, RSI), use the same pattern: take the fixed value for that timeframe from `db_candle["indicators"]` and compare to current price (or to the threshold that makes sense for that indicator).
 

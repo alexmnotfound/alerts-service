@@ -9,16 +9,32 @@ Contract (for current and future indicators: OBV, RSI, etc.):
   separately: we compare current price to that timeframe's fixed indicator values.
 """
 
+from datetime import datetime, timezone
 from typing import Optional, List
 
-from ..config import PIVOT_THRESHOLD
+from ..config import PIVOT_THRESHOLD, CANDLE_PATTERN_GRACE_AFTER_CLOSE
 
 # Doji message (used by monitor for dedupe: one alert per closed candle)
 DOJI_ALERT_MESSAGE = "Doji candle pattern on last closed candle"
 
 
+def _candle_just_closed(db_candle) -> bool:
+    """True if the candle close time is within the grace window (1 min after close)."""
+    ts = db_candle.get("timestamp")
+    if ts is None:
+        return False
+    if hasattr(ts, "tzinfo") and ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    age_seconds = (now - ts).total_seconds()
+    return 0 <= age_seconds <= CANDLE_PATTERN_GRACE_AFTER_CLOSE
+
+
 def _check_pivot_alert(current_ohlc, db_candle) -> Optional[str]:
-    """Alert when current price is within PIVOT_THRESHOLD of any monthly pivot level."""
+    """Alert when current price is within PIVOT_THRESHOLD of any monthly pivot level. Only on 1H timeframe."""
+    tf = (db_candle or {}).get("timeframe") or ""
+    if str(tf).strip().lower() != "1h":
+        return None
     close = current_ohlc.get("close") if current_ohlc else None
     if close is None:
         return None
@@ -42,8 +58,10 @@ def _check_pivot_alert(current_ohlc, db_candle) -> Optional[str]:
 
 
 def _check_doji_alert(current_ohlc, db_candle) -> Optional[str]:
-    """Alert when the last closed candle (this timeframe) has Doji pattern. Evaluated at close only."""
+    """Alert when the candle that just closed (this timeframe) has Doji. Only at close: within grace window."""
     if not db_candle:
+        return None
+    if not _candle_just_closed(db_candle):
         return None
     pattern = db_candle.get("candle_pattern")
     if not pattern or str(pattern).strip().upper() != "DOJI":
@@ -51,13 +69,14 @@ def _check_doji_alert(current_ohlc, db_candle) -> Optional[str]:
     return DOJI_ALERT_MESSAGE
 
 
-# EMA50/EMA200 only on 4h, 1d, 1M (per your config)
-EMA_TIMEFRAMES = ("4h", "1d", "1M")
+# EMA50/EMA200 on 1h, 4h, 1d, 1M
+EMA_TIMEFRAMES = ("1h", "4h", "1d", "1M")
 EMA_PERIODS = (50, 200)
+EMA_CLOSE_TOLERANCE = 0.01  # 1%: alert when price close is within 1% of EMA
 
 
 def _check_ema_50_200_alert(current_ohlc, db_candle) -> Optional[str]:
-    """Alert when current price touches or crosses EMA50 or EMA200. Only for 4h, 1d, 1M."""
+    """Alert when price close is within 1% of EMA50/200, or touches/crosses. For 1h, 4h, 1d, 1M."""
     if not current_ohlc or not db_candle:
         return None
     tf = (db_candle.get("timeframe") or "").strip().lower()
@@ -76,31 +95,39 @@ def _check_ema_50_200_alert(current_ohlc, db_candle) -> Optional[str]:
         if key not in ema or ema[key] is None:
             continue
         ema_value = ema[key]
+        if ema_value <= 0:
+            continue
+        try:
+            distance = abs(close - ema_value) / abs(ema_value)
+        except (TypeError, ZeroDivisionError):
+            continue
+        # Only send any EMA alert when price is within 1% of the EMA
+        if distance > EMA_CLOSE_TOLERANCE:
+            continue
         if low <= ema_value <= high:
             if close > ema_value:
-                return f"Price touched and closed above EMA{period}"
+                return f"Price touched and is above EMA{period}"
             if close < ema_value:
-                return f"Price touched and closed below EMA{period}"
+                return f"Price touched and is below EMA{period}"
             return f"Price touched EMA{period}"
+        # Within 1% but candle range did not touch EMA: say "near" / "above/below", not "crossed"
         if close > ema_value:
-            return f"Price crossed above EMA{period}"
+            return f"Price above EMA{period} (within 1%)"
         if close < ema_value:
-            return f"Price crossed below EMA{period}"
+            return f"Price below EMA{period} (within 1%)"
+        return f"Price within 1% of EMA{period} at ${ema_value:,.2f}"
     return None
 
 
-# Register rules here. Monitor runs run_all(current_ohlc, db_candle) and sends any returned messages.
-RULES = [
-    _check_pivot_alert,
-    _check_doji_alert,
-    _check_ema_50_200_alert,
-]
+# Price rules: pivot (1H only) + EMA. Run on 1H every 5 min.
+RULES_PRICE = [_check_pivot_alert, _check_ema_50_200_alert]
+# Candle pattern rules: only at close (1 min after). Run for all TFs when in that window.
+RULES_CANDLE_PATTERN = [_check_doji_alert]
 
 
-def run_all(current_ohlc, db_candle) -> List[str]:
-    """Run all registered rules. Returns list of alert messages (no duplicates, order preserved)."""
+def _run_rules(current_ohlc, db_candle, rules: list) -> List[str]:
     alerts = []
-    for rule in RULES:
+    for rule in rules:
         try:
             msg = rule(current_ohlc, db_candle)
             if msg and msg not in alerts:
@@ -108,3 +135,18 @@ def run_all(current_ohlc, db_candle) -> List[str]:
         except Exception:
             continue
     return alerts
+
+
+def run_price_rules(current_ohlc, db_candle) -> List[str]:
+    """Pivot + EMA only. Used for 1H every 5 min."""
+    return _run_rules(current_ohlc, db_candle, RULES_PRICE)
+
+
+def run_candle_pattern_rules(current_ohlc, db_candle) -> List[str]:
+    """Doji etc. Only when candle just closed (1 min after). Used for all TFs in at-close pass."""
+    return _run_rules(current_ohlc, db_candle, RULES_CANDLE_PATTERN)
+
+
+def run_all(current_ohlc, db_candle) -> List[str]:
+    """Run all rules (legacy). Prefer run_price_rules / run_candle_pattern_rules."""
+    return _run_rules(current_ohlc, db_candle, RULES_PRICE + RULES_CANDLE_PATTERN)

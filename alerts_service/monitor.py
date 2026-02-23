@@ -13,13 +13,15 @@ from .config import (
     STALE_DATA_SECONDS_BY_TIMEFRAME,
     STALE_DATA_SECONDS_DEFAULT,
     ALERT_COOLDOWN_SECONDS,
+    CANDLE_PATTERN_CHECK_INTERVAL,
+    is_within_1_min_after_close,
 )
 from .db import (
     fetch_latest_candle_with_indicators,
     check_connection as db_check_connection,
 )
 from .binance_client import fetch_current_ohlc
-from .alerts.rules import run_all, DOJI_ALERT_MESSAGE
+from .alerts.rules import run_price_rules, run_candle_pattern_rules, DOJI_ALERT_MESSAGE
 from .notifier.notifier import send_consolidated_alert
 
 logging.basicConfig(
@@ -111,10 +113,8 @@ def is_data_stale(candle: Dict[str, Any], timeframe: Optional[str] = None) -> bo
     return delta > threshold
 
 
-def process_ticker_timeframe(ticker: str, timeframe: str) -> None:
-    """Fetch latest candle from DB; if missing/stale trigger OHLC update; then run alerts."""
-    logger.info(f"Processing {ticker} {timeframe}")
-
+def _ensure_candle(ticker: str, timeframe: str) -> Optional[Dict[str, Any]]:
+    """Fetch latest candle; trigger update if missing/stale and retry once. Return candle or None."""
     candle = fetch_latest_candle_with_indicators(ticker, timeframe)
     if not candle:
         logger.warning(f"No data for {ticker} {timeframe}. Triggering update...")
@@ -122,83 +122,70 @@ def process_ticker_timeframe(ticker: str, timeframe: str) -> None:
         time.sleep(5)
         candle = fetch_latest_candle_with_indicators(ticker, timeframe)
         if not candle:
-            logger.error(f"Still no data for {ticker} {timeframe}")
-            return
-
+            return None
     if is_data_stale(candle, timeframe):
         logger.warning(f"Data for {ticker} {timeframe} is stale. Triggering update...")
         trigger_ohlc_update_symbol_timeframe(ticker, timeframe)
         time.sleep(5)
         candle = fetch_latest_candle_with_indicators(ticker, timeframe)
         if not candle or is_data_stale(candle, timeframe):
-            logger.error(f"Data still stale for {ticker} {timeframe}")
-            return
+            return None
+    return candle
 
+
+def process_ticker_price_1h(ticker: str) -> None:
+    """Price pass: 1H only. Pivot + EMA. Run every CHECK_INTERVAL (e.g. 5 min)."""
+    timeframe = "1h"
+    candle = _ensure_candle(ticker, timeframe)
+    if not candle:
+        return
     current_ohlc = fetch_current_ohlc(ticker, timeframe)
     if not current_ohlc:
-        logger.warning(f"No current OHLC from Binance for {ticker} {timeframe}")
         return
-
     try:
-        alerts = run_all(current_ohlc, candle)
-        alerts = _filter_doji_dedupe(ticker, timeframe, candle, alerts)
-        for msg in alerts:
-            logger.info(f"Alert {ticker} {timeframe}: {msg}")
-        if alerts:
-            send_consolidated_alert(
-                ticker, alerts, current_ohlc.get("close"), timeframe
-            )
+        alerts = run_price_rules(current_ohlc, candle)
+        if not alerts:
+            return
+        now_utc = datetime.now(timezone.utc)
+        timeframe_alerts = [(timeframe, msg) for msg in alerts]
+        all_alerts, timeframes_sent = _apply_cooldown(ticker, timeframe_alerts, now_utc)
+        if all_alerts:
+            send_consolidated_alert(ticker, all_alerts, current_ohlc.get("close"), "MULTI")
+            for tf in timeframes_sent:
+                _last_alert_sent[(ticker, tf)] = now_utc
     except Exception as e:
-        logger.error(f"Error checking alerts for {ticker} {timeframe}: {e}")
+        logger.error(f"Error price rules {ticker} {timeframe}: {e}")
 
 
-def process_ticker(ticker: str) -> None:
-    """Process one ticker across all timeframes; send one consolidated message per ticker (respecting per-TF cooldown)."""
-    logger.info(f"Processing ticker: {ticker}")
-    timeframe_alerts = []  # (timeframe, msg)
+def process_ticker_candle_pattern(ticker: str) -> None:
+    """Candle-pattern pass: all TFs where we're within 1 min after candle close. Doji etc. Run every CANDLE_PATTERN_CHECK_INTERVAL."""
+    timeframe_alerts = []
     current_price = None
-
     for timeframe in TIMEFRAMES:
+        if not is_within_1_min_after_close(timeframe):
+            continue
         try:
-            candle = fetch_latest_candle_with_indicators(ticker, timeframe)
+            candle = _ensure_candle(ticker, timeframe)
             if not candle:
-                logger.warning(f"No data for {ticker} {timeframe}. Triggering update...")
-                trigger_ohlc_update_symbol_timeframe(ticker, timeframe)
-                time.sleep(5)
-                candle = fetch_latest_candle_with_indicators(ticker, timeframe)
-                if not candle:
-                    logger.error(f"No data for {ticker} {timeframe}")
-                    continue
-
+                continue
             current_ohlc = fetch_current_ohlc(ticker, timeframe)
             if not current_ohlc:
-                logger.warning(f"No current OHLC from Binance for {ticker} {timeframe}")
                 time.sleep(1)
                 continue
             if current_price is None:
                 current_price = current_ohlc.get("close")
-
-            if is_data_stale(candle, timeframe):
-                logger.warning(f"Data for {ticker} {timeframe} is stale. Triggering update...")
-                trigger_ohlc_update_symbol_timeframe(ticker, timeframe)
-                time.sleep(5)
-                candle = fetch_latest_candle_with_indicators(ticker, timeframe)
-                if not candle or is_data_stale(candle, timeframe):
-                    continue
-
-            alerts = run_all(current_ohlc, candle)
+            alerts = run_candle_pattern_rules(current_ohlc, candle)
             alerts = _filter_doji_dedupe(ticker, timeframe, candle, alerts)
             for msg in alerts:
                 timeframe_alerts.append((timeframe, msg))
         except Exception as e:
-            logger.error(f"Error processing {ticker} {timeframe}: {e}")
+            logger.error(f"Error candle pattern {ticker} {timeframe}: {e}")
         time.sleep(1)
-
     if timeframe_alerts:
         now_utc = datetime.now(timezone.utc)
         all_alerts, timeframes_sent = _apply_cooldown(ticker, timeframe_alerts, now_utc)
         if all_alerts:
-            send_consolidated_alert(ticker, all_alerts, current_price, "MULTI")
+            send_consolidated_alert(ticker, all_alerts, current_price or 0, "MULTI")
             for tf in timeframes_sent:
                 _last_alert_sent[(ticker, tf)] = now_utc
 
@@ -207,24 +194,34 @@ def main():
     logger.info("Starting alerts service...")
     logger.info(f"Tickers: {', '.join(TICKERS)}")
     logger.info(f"Timeframes: {', '.join(TIMEFRAMES)}")
-    logger.info(f"Check interval: {CHECK_INTERVAL}s")
+    logger.info(f"Price pass (1H): every {CHECK_INTERVAL}s. Candle pattern: every {CANDLE_PATTERN_CHECK_INTERVAL}s, 1 min after close.")
     logger.info(f"OHLC API: {OHLC_API_BASE_URL}")
 
     if not db_check_connection():
         logger.error("Database connection failed. Check DB_* env vars.")
         return
 
+    last_price_pass = time.time()  # Skip price pass on startup; first run after CHECK_INTERVAL
     while True:
         try:
-            logger.info("Starting check...")
+            now = time.time()
+            # Candle-pattern pass: every 1 min, only for TFs in the 1-min-after-close window
             for ticker in TICKERS:
                 try:
-                    process_ticker(ticker)
+                    process_ticker_candle_pattern(ticker)
                 except Exception as e:
-                    logger.error(f"Error processing {ticker}: {e}")
+                    logger.error(f"Error candle pattern {ticker}: {e}")
                 time.sleep(2)
-            logger.info("Check completed. Waiting for next run...")
-            time.sleep(CHECK_INTERVAL)
+            # Price pass (1H pivot + EMA): every CHECK_INTERVAL
+            if now - last_price_pass >= CHECK_INTERVAL:
+                last_price_pass = now
+                for ticker in TICKERS:
+                    try:
+                        process_ticker_price_1h(ticker)
+                    except Exception as e:
+                        logger.error(f"Error price pass {ticker}: {e}")
+                    time.sleep(2)
+            time.sleep(CANDLE_PATTERN_CHECK_INTERVAL)
         except KeyboardInterrupt:
             logger.info("Service stopped by user")
             break
