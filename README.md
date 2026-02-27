@@ -15,12 +15,12 @@ Monitors cryptocurrency tickers using OHLC and technical indicators from the sam
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DB_HOST` | PostgreSQL host | `localhost` |
+| `DB_HOST` | PostgreSQL host | `localhost` (use `host.docker.internal` when running in Docker and Postgres is on the host, e.g. OHLC stack on VM) |
 | `DB_PORT` | PostgreSQL port | `5432` |
 | `DB_NAME` | Database name | `ohlc` |
 | `DB_USER` | Database user | `postgres` |
 | `DB_PASSWORD` | Database password | *(required)* |
-| `OHLC_API_BASE_URL` | OHLC Handler base URL | `http://localhost:8000` |
+| `OHLC_API_BASE_URL` | OHLC Handler base URL | `http://localhost:8000` (use `http://host.docker.internal:8000` when alerts runs in Docker and OHLC is on the host) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token | *(required for alerts)* |
 | `TELEGRAM_CHAT_ID` | Chat ID for alerts | *(required for alerts)* |
 | `CHECK_INTERVAL` | Seconds between **price pass** (1H pivot + EMA). | `300` (5 min) |
