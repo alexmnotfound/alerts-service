@@ -1,4 +1,4 @@
-.PHONY: run install run-bare test-telegram test-alerts-range docker-build docker-up docker-down clean
+.PHONY: run install run-bare test-telegram test-alerts-range docker-build docker-up docker-down logs clean
 
 VENV := venv
 PYTHON := $(VENV)/bin/python
@@ -28,6 +28,9 @@ docker-up:
 
 docker-down:
 	docker compose down
+
+logs:
+	docker compose logs -f alerts-service
 
 clean:
 	rm -rf $(VENV) .ruff_cache
