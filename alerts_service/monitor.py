@@ -19,6 +19,7 @@ from .config import (
 from .db import (
     fetch_latest_candle_with_indicators,
     check_connection as db_check_connection,
+    get_db_config,
 )
 from .binance_client import fetch_current_ohlc
 from .alerts.rules import run_price_rules, run_candle_pattern_rules, DOJI_ALERT_MESSAGE
@@ -196,6 +197,7 @@ def main():
     logger.info(f"Timeframes: {', '.join(TIMEFRAMES)}")
     logger.info(f"Price pass (1H): every {CHECK_INTERVAL}s. Candle pattern: every {CANDLE_PATTERN_CHECK_INTERVAL}s, 1 min after close.")
     logger.info(f"OHLC API: {OHLC_API_BASE_URL}")
+    logger.info(f"DB host: {get_db_config().get('host', '?')}")
 
     if not db_check_connection():
         logger.error("Database connection failed. Check DB_* env vars.")
