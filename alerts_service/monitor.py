@@ -211,7 +211,7 @@ def main():
         logger.error("Database connection failed. Check DB_* env vars.")
         return
 
-    last_price_pass = time.time()  # Skip price pass on startup; first run after CHECK_INTERVAL
+    last_price_pass = 0  # Run price pass immediately on startup, then every CHECK_INTERVAL
     while True:
         try:
             now = time.time()
