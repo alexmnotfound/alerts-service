@@ -22,7 +22,13 @@ from .db import (
     get_db_config,
 )
 from .binance_client import fetch_current_ohlc
-from .alerts.rules import run_price_rules, run_candle_pattern_rules, DOJI_ALERT_MESSAGE
+from .alerts.rules import (
+    run_price_rules,
+    run_candle_pattern_rules,
+    DOJI_ALERT_MESSAGE,
+    TWEEZER_TOP_ALERT_MESSAGE,
+    TWEEZER_BOTTOM_ALERT_MESSAGE,
+)
 from .notifier.notifier import send_consolidated_alert
 
 logging.basicConfig(
@@ -31,38 +37,40 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Doji: alert only once per closed candle (ticker, timeframe, candle timestamp)
-_doji_alerted: set = set()
+# Candle patterns: alert only once per closed candle (ticker, timeframe, candle timestamp)
+_candle_pattern_alerted: set = set()
+CANDLE_PATTERN_RULE_IDS = frozenset({"doji", "tweezer_top", "tweezer_bottom"})
 
-# Per (ticker, timeframe): last time we sent any alert (UTC). Used for cooldown.
+# Per (ticker, timeframe, rule_id): last time we sent this alert type (UTC). Cooldown is per rule.
 _last_alert_sent: Dict[tuple, datetime] = {}
 
 
 def _apply_cooldown(ticker: str, timeframe_alerts: list, now_utc: datetime):
     """
-    Keep only (timeframe, msg) for which cooldown has passed.
-    Returns (list of '[TF] msg' strings, set of timeframes included).
-    Caller should set _last_alert_sent[(ticker, tf)] = now_utc for each tf in the set after sending.
+    timeframe_alerts: [(tf, msg, rule_id), ...].
+    Keep only entries for which cooldown has passed for that (ticker, tf, rule_id).
+    Returns (list of '[TF] msg' strings, set of (tf, rule_id) that were allowed).
+    Caller sets _last_alert_sent[(ticker, tf, rule_id)] = now_utc for each allowed (tf, rule_id) after sending.
     """
     allowed = []
-    timeframes_sent = set()
-    for tf, msg in timeframe_alerts:
-        key = (ticker, tf)
+    sent_keys = set()
+    for tf, msg, rule_id in timeframe_alerts:
+        key = (ticker, tf, rule_id)
         last = _last_alert_sent.get(key)
         cooldown = ALERT_COOLDOWN_SECONDS.get(tf, 24 * 3600)
         if last is None or (now_utc - last).total_seconds() >= cooldown:
             allowed.append(f"[{tf.upper()}] {msg}")
-            timeframes_sent.add(tf)
-    return allowed, timeframes_sent
+            sent_keys.add((tf, rule_id))
+    return allowed, sent_keys
 
 
-def _filter_doji_dedupe(ticker: str, timeframe: str, candle: Dict[str, Any], alerts: list) -> list:
-    """Remove Doji alert if we already sent for this closed candle."""
+def _filter_candle_pattern_dedupe(ticker: str, timeframe: str, candle: Dict[str, Any], alerts: list) -> list:
+    """One alert per closed candle for candle patterns. If we already sent for this candle, drop pattern alerts. alerts: [(msg, rule_id), ...]."""
     key = (ticker, timeframe, candle.get("timestamp"))
-    if key in _doji_alerted:
-        return [a for a in alerts if a != DOJI_ALERT_MESSAGE]
-    if DOJI_ALERT_MESSAGE in alerts:
-        _doji_alerted.add(key)
+    if key in _candle_pattern_alerted:
+        return [(m, rid) for m, rid in alerts if rid not in CANDLE_PATTERN_RULE_IDS]
+    if any(rid in CANDLE_PATTERN_RULE_IDS for _, rid in alerts):
+        _candle_pattern_alerted.add(key)
     return alerts
 
 
@@ -148,12 +156,12 @@ def process_ticker_price_1h(ticker: str) -> None:
         if not alerts:
             return
         now_utc = datetime.now(timezone.utc)
-        timeframe_alerts = [(timeframe, msg) for msg in alerts]
-        all_alerts, timeframes_sent = _apply_cooldown(ticker, timeframe_alerts, now_utc)
+        timeframe_alerts = [(timeframe, msg, rule_id) for msg, rule_id in alerts]
+        all_alerts, sent_keys = _apply_cooldown(ticker, timeframe_alerts, now_utc)
         if all_alerts:
             send_consolidated_alert(ticker, all_alerts, current_ohlc.get("close"), "MULTI")
-            for tf in timeframes_sent:
-                _last_alert_sent[(ticker, tf)] = now_utc
+            for tf, rule_id in sent_keys:
+                _last_alert_sent[(ticker, tf, rule_id)] = now_utc
     except Exception as e:
         logger.error(f"Error price rules {ticker} {timeframe}: {e}")
 
@@ -176,19 +184,19 @@ def process_ticker_candle_pattern(ticker: str) -> None:
             if current_price is None:
                 current_price = current_ohlc.get("close")
             alerts = run_candle_pattern_rules(current_ohlc, candle)
-            alerts = _filter_doji_dedupe(ticker, timeframe, candle, alerts)
-            for msg in alerts:
-                timeframe_alerts.append((timeframe, msg))
+            alerts = _filter_candle_pattern_dedupe(ticker, timeframe, candle, alerts)
+            for msg, rule_id in alerts:
+                timeframe_alerts.append((timeframe, msg, rule_id))
         except Exception as e:
             logger.error(f"Error candle pattern {ticker} {timeframe}: {e}")
         time.sleep(1)
     if timeframe_alerts:
         now_utc = datetime.now(timezone.utc)
-        all_alerts, timeframes_sent = _apply_cooldown(ticker, timeframe_alerts, now_utc)
+        all_alerts, sent_keys = _apply_cooldown(ticker, timeframe_alerts, now_utc)
         if all_alerts:
             send_consolidated_alert(ticker, all_alerts, current_price or 0, "MULTI")
-            for tf in timeframes_sent:
-                _last_alert_sent[(ticker, tf)] = now_utc
+            for tf, rule_id in sent_keys:
+                _last_alert_sent[(ticker, tf, rule_id)] = now_utc
 
 
 def main():

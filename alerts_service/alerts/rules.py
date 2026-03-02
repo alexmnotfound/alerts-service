@@ -10,12 +10,14 @@ Contract (for current and future indicators: OBV, RSI, etc.):
 """
 
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 from ..config import PIVOT_THRESHOLD, CANDLE_PATTERN_GRACE_AFTER_CLOSE
 
-# Doji message (used by monitor for dedupe: one alert per closed candle)
+# Candle-pattern messages (used by monitor for dedupe: one alert per closed candle)
 DOJI_ALERT_MESSAGE = "Doji candle pattern on last closed candle"
+TWEEZER_TOP_ALERT_MESSAGE = "Tweezer Top candle pattern on last closed candle"
+TWEEZER_BOTTOM_ALERT_MESSAGE = "Tweezer Bottom candle pattern on last closed candle"
 
 
 def _candle_just_closed(db_candle) -> bool:
@@ -69,6 +71,30 @@ def _check_doji_alert(current_ohlc, db_candle) -> Optional[str]:
     return DOJI_ALERT_MESSAGE
 
 
+def _check_tweezer_top_alert(current_ohlc, db_candle) -> Optional[str]:
+    """Alert when the candle that just closed has Tweezer Top. Only at close: within grace window."""
+    if not db_candle:
+        return None
+    if not _candle_just_closed(db_candle):
+        return None
+    pattern = db_candle.get("candle_pattern")
+    if not pattern or str(pattern).strip() != "Tweezer Top":
+        return None
+    return TWEEZER_TOP_ALERT_MESSAGE
+
+
+def _check_tweezer_bottom_alert(current_ohlc, db_candle) -> Optional[str]:
+    """Alert when the candle that just closed has Tweezer Bottom. Only at close: within grace window."""
+    if not db_candle:
+        return None
+    if not _candle_just_closed(db_candle):
+        return None
+    pattern = db_candle.get("candle_pattern")
+    if not pattern or str(pattern).strip() != "Tweezer Bottom":
+        return None
+    return TWEEZER_BOTTOM_ALERT_MESSAGE
+
+
 # EMA50/EMA200 on 1h, 4h, 1d, 1M
 EMA_TIMEFRAMES = ("1h", "4h", "1d", "1M")
 EMA_PERIODS = (50, 200)
@@ -119,34 +145,44 @@ def _check_ema_50_200_alert(current_ohlc, db_candle) -> Optional[str]:
     return None
 
 
-# Price rules: pivot (1H only) + EMA. Run on 1H every 5 min.
-RULES_PRICE = [_check_pivot_alert, _check_ema_50_200_alert]
-# Candle pattern rules: only at close (1 min after). Run for all TFs when in that window.
-RULES_CANDLE_PATTERN = [_check_doji_alert]
+# (rule_fn, rule_id) so cooldown can be applied per rule (e.g. EMA vs PIVOT separately).
+RULES_PRICE = [
+    (_check_pivot_alert, "pivot"),
+    (_check_ema_50_200_alert, "ema_50_200"),
+]
+RULES_CANDLE_PATTERN = [
+    (_check_doji_alert, "doji"),
+    (_check_tweezer_top_alert, "tweezer_top"),
+    (_check_tweezer_bottom_alert, "tweezer_bottom"),
+]
 
 
-def _run_rules(current_ohlc, db_candle, rules: list) -> List[str]:
-    alerts = []
-    for rule in rules:
+def _run_rules(current_ohlc, db_candle, rules: list) -> List[Tuple[str, str]]:
+    """Returns [(msg, rule_id), ...] for rules that fired."""
+    alerts: List[Tuple[str, str]] = []
+    seen_msgs = set()
+    for rule_fn, rule_id in rules:
         try:
-            msg = rule(current_ohlc, db_candle)
-            if msg and msg not in alerts:
-                alerts.append(msg)
+            msg = rule_fn(current_ohlc, db_candle)
+            if msg and msg not in seen_msgs:
+                seen_msgs.add(msg)
+                alerts.append((msg, rule_id))
         except Exception:
             continue
     return alerts
 
 
-def run_price_rules(current_ohlc, db_candle) -> List[str]:
-    """Pivot + EMA only. Used for 1H every 5 min."""
+def run_price_rules(current_ohlc, db_candle) -> List[Tuple[str, str]]:
+    """Pivot + EMA only. Used for 1H every 5 min. Returns [(msg, rule_id), ...]."""
     return _run_rules(current_ohlc, db_candle, RULES_PRICE)
 
 
-def run_candle_pattern_rules(current_ohlc, db_candle) -> List[str]:
-    """Doji etc. Only when candle just closed (1 min after). Used for all TFs in at-close pass."""
+def run_candle_pattern_rules(current_ohlc, db_candle) -> List[Tuple[str, str]]:
+    """Doji etc. Only when candle just closed. Returns [(msg, rule_id), ...]."""
     return _run_rules(current_ohlc, db_candle, RULES_CANDLE_PATTERN)
 
 
 def run_all(current_ohlc, db_candle) -> List[str]:
-    """Run all rules (legacy). Prefer run_price_rules / run_candle_pattern_rules."""
-    return _run_rules(current_ohlc, db_candle, RULES_PRICE + RULES_CANDLE_PATTERN)
+    """Run all rules (legacy). Returns flat list of messages."""
+    out = _run_rules(current_ohlc, db_candle, RULES_PRICE + RULES_CANDLE_PATTERN)
+    return [msg for msg, _ in out]
