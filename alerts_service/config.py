@@ -3,8 +3,14 @@
 import os
 from datetime import datetime, timezone, timedelta
 
-# List of tickers to monitor (must match OHLC Handler: BTCUSDT, ETHUSDT)
-TICKERS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'LINKUSDT']
+# List of tickers to monitor (must exist in OHLC Handler / Binance)
+TICKERS = [
+    "ARBUSDT", "ATOMUSDT", "AVAXUSDT", "BCHUSDT", "BERTUSDT", "BNBUSDT", "BTCUSDT",
+    "DOGEUSDT", "DOTUSDT", "ENAUSDT", "ETCUSDT", "ETHUSDT", "FILUSDT", "HBARUSDT",
+    "INJUSDT", "IOTAUSDT", "LINKUSDT", "LTCUSDT", "MANAUSDT", "NEARUSDT", "NEOUSDT",
+    "OPUSDT", "POLUSDT", "RENDERUSDT", "RUNEUSDT", "SANDUSDT", "SNXUSDT", "SOLUSDT",
+    "SUIUSDT", "SUSDT", "TAOUSDT", "THETAUSDT", "TONUSDT", "UNIUSDT", "XMRUSDT", "XRPUSDT",
+]
 
 # OHLC Handler API: trigger updates when data is missing/stale
 # In production set OHLC_API_BASE_URL to the OHLC Handler host (e.g. http://ohlc-handler:8000)
