@@ -95,14 +95,14 @@ def _check_tweezer_bottom_alert(current_ohlc, db_candle) -> Optional[str]:
     return TWEEZER_BOTTOM_ALERT_MESSAGE
 
 
-# EMA50/EMA200 on 1h, 4h, 1d, 1M
+# EMA200 only, on 1h, 4h, 1d, 1M
 EMA_TIMEFRAMES = ("1h", "4h", "1d", "1M")
-EMA_PERIODS = (50, 200)
+EMA_PERIODS = (200,)
 EMA_CLOSE_TOLERANCE = 0.01  # 1%: alert when price close is within 1% of EMA
 
 
-def _check_ema_50_200_alert(current_ohlc, db_candle) -> Optional[str]:
-    """Alert when price close is within 1% of EMA50/200, or touches/crosses. For 1h, 4h, 1d, 1M."""
+def _check_ema_200_alert(current_ohlc, db_candle) -> Optional[str]:
+    """Alert when price close is within 1% of EMA200, or touches/crosses. For 1h, 4h, 1d, 1M."""
     if not current_ohlc or not db_candle:
         return None
     tf = (db_candle.get("timeframe") or "").strip().lower()
@@ -148,7 +148,7 @@ def _check_ema_50_200_alert(current_ohlc, db_candle) -> Optional[str]:
 # (rule_fn, rule_id) so cooldown can be applied per rule (e.g. EMA vs PIVOT separately).
 RULES_PRICE = [
     (_check_pivot_alert, "pivot"),
-    (_check_ema_50_200_alert, "ema_50_200"),
+    (_check_ema_200_alert, "ema_200"),
 ]
 RULES_CANDLE_PATTERN = [
     (_check_doji_alert, "doji"),

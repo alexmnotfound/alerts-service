@@ -18,13 +18,15 @@ OHLC_API_BASE_URL = os.getenv("OHLC_API_BASE_URL", "http://localhost:8000")
 
 # Timeframes to monitor (must match OHLC Handler: 1h, 4h, 1d, 1w, 1M)
 TIMEFRAMES = ["1h", "4h", "1d", "1w", "1M"]
+# Timeframes for price pass (pivot on 1h only; EMA200 on all four)
+PRICE_PASS_TIMEFRAMES = ["1h", "4h", "1d", "1M"]
 
 # How often to run a full check (fetch Binance price + DB indicators + run rules). Shorter = faster alerts.
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", os.getenv("HOURLY_CHECK_INTERVAL", "300")))  # default 5 min
 RETRY_INTERVAL = int(os.getenv("RETRY_INTERVAL", "30"))
 
 # Alert thresholds
-PIVOT_THRESHOLD = 0.02  # 2% deviation for "price meets" monthly pivot
+PIVOT_THRESHOLD = 0.01  # 1% deviation for "price meets" monthly pivot
 
 # Stale data: per-timeframe max age (seconds) for latest candle before we trigger an OHLC update.
 # ~2× the candle period so we allow one closed candle plus some slack.

@@ -8,6 +8,7 @@ from .config import (
     TICKERS,
     OHLC_API_BASE_URL,
     TIMEFRAMES,
+    PRICE_PASS_TIMEFRAMES,
     CHECK_INTERVAL,
     RETRY_INTERVAL,
     STALE_DATA_SECONDS_BY_TIMEFRAME,
@@ -142,9 +143,8 @@ def _ensure_candle(ticker: str, timeframe: str) -> Optional[Dict[str, Any]]:
     return candle
 
 
-def process_ticker_price_1h(ticker: str) -> None:
-    """Price pass: 1H only. Pivot + EMA. Run every CHECK_INTERVAL (e.g. 5 min)."""
-    timeframe = "1h"
+def process_ticker_price(ticker: str, timeframe: str) -> None:
+    """Price pass: Pivot (1h only) + EMA200. Run for each PRICE_PASS_TIMEFRAMES."""
     candle = _ensure_candle(ticker, timeframe)
     if not candle:
         return
@@ -203,7 +203,7 @@ def main():
     logger.info("Starting alerts service...")
     logger.info(f"Tickers: {', '.join(TICKERS)}")
     logger.info(f"Timeframes: {', '.join(TIMEFRAMES)}")
-    logger.info(f"Price pass (1H): every {CHECK_INTERVAL}s. Candle pattern: every {CANDLE_PATTERN_CHECK_INTERVAL}s, 1 min after close.")
+    logger.info(f"Price pass (1h/4h/1d/1M): every {CHECK_INTERVAL}s. Candle pattern: every {CANDLE_PATTERN_CHECK_INTERVAL}s, 1 min after close.")
     logger.info(f"OHLC API: {OHLC_API_BASE_URL}")
     logger.info(f"DB host: {get_db_config().get('host', '?')}")
 
@@ -222,15 +222,16 @@ def main():
                 except Exception as e:
                     logger.error(f"Error candle pattern {ticker}: {e}")
                 time.sleep(2)
-            # Price pass (1H pivot + EMA): every CHECK_INTERVAL
+            # Price pass (pivot 1h + EMA200 1h/4h/1d/1M): every CHECK_INTERVAL
             if now - last_price_pass >= CHECK_INTERVAL:
                 last_price_pass = now
                 for ticker in TICKERS:
-                    try:
-                        process_ticker_price_1h(ticker)
-                    except Exception as e:
-                        logger.error(f"Error price pass {ticker}: {e}")
-                    time.sleep(2)
+                    for timeframe in PRICE_PASS_TIMEFRAMES:
+                        try:
+                            process_ticker_price(ticker, timeframe)
+                        except Exception as e:
+                            logger.error(f"Error price pass {ticker} {timeframe}: {e}")
+                        time.sleep(2)
             time.sleep(CANDLE_PATTERN_CHECK_INTERVAL)
         except KeyboardInterrupt:
             logger.info("Service stopped by user")
