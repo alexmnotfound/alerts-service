@@ -145,10 +145,35 @@ def _check_ema_200_alert(current_ohlc, db_candle) -> Optional[str]:
     return None
 
 
+# Daily SMMA 99 (RMA on daily close): alert when price within 1% of it. Only on 1d candle.
+DAILY_SMMA_99_TOLERANCE = 0.01  # 1%
+
+
+def _check_daily_smma_99_alert(current_ohlc, db_candle) -> Optional[str]:
+    """Alert when current price is within 1% of Daily SMMA 99. Only on 1d timeframe."""
+    tf = (db_candle or {}).get("timeframe") or ""
+    if str(tf).strip().lower() != "1d":
+        return None
+    close = current_ohlc.get("close") if current_ohlc else None
+    if close is None:
+        return None
+    smma = ((db_candle or {}).get("indicators") or {}).get("daily_smma_99")
+    if smma is None or smma <= 0:
+        return None
+    try:
+        distance = abs(close - smma) / abs(smma)
+        if distance <= DAILY_SMMA_99_TOLERANCE:
+            return f"Price within 1% of Daily SMMA 99 at ${smma:,.2f}"
+    except (TypeError, ZeroDivisionError):
+        pass
+    return None
+
+
 # (rule_fn, rule_id) so cooldown can be applied per rule (e.g. EMA vs PIVOT separately).
 RULES_PRICE = [
     (_check_pivot_alert, "pivot"),
     (_check_ema_200_alert, "ema_200"),
+    (_check_daily_smma_99_alert, "daily_smma_99"),
 ]
 RULES_CANDLE_PATTERN = [
     (_check_doji_alert, "doji"),

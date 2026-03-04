@@ -151,6 +151,15 @@ def _build_candle_with_indicators(
             "S4": float(pivot_row["s4"]) if pivot_row["s4"] is not None else None,
             "S5": float(pivot_row["s5"]) if pivot_row["s5"] is not None else None,
         }
+    cur.execute(
+        "SELECT value FROM daily_smma_99 WHERE ticker = %s ORDER BY timestamp DESC LIMIT 1",
+        (ticker,),
+    )
+    smma_row = cur.fetchone()
+    if smma_row and smma_row["value"] is not None:
+        candle["indicators"]["daily_smma_99"] = float(smma_row["value"])
+    else:
+        candle["indicators"]["daily_smma_99"] = None
     return candle
 
 
