@@ -60,7 +60,8 @@ def _apply_cooldown(ticker: str, timeframe_alerts: list, now_utc: datetime):
         last = _last_alert_sent.get(key)
         cooldown = ALERT_COOLDOWN_SECONDS.get(tf, 24 * 3600)
         if last is None or (now_utc - last).total_seconds() >= cooldown:
-            allowed.append(f"[{tf.upper()}] {msg}")
+            # Pivot is monthly, same for all TFs; don't add timeframe prefix
+            allowed.append(msg if rule_id == "pivot" else f"[{tf.upper()}] {msg}")
             sent_keys.add((tf, rule_id))
     return allowed, sent_keys
 
