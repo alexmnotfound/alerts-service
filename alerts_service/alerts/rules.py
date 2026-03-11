@@ -97,7 +97,7 @@ def _check_tweezer_bottom_alert(current_ohlc, db_candle) -> Optional[str]:
 
 # EMA200 only, on 4h, 1d, 1w, 1M (no 1h)
 EMA_TIMEFRAMES = ("4h", "1d", "1w", "1M")
-EMA_PERIODS = (200,50,)
+EMA_PERIODS = (200,)
 EMA_CLOSE_TOLERANCE = 0.01  # 1%: alert when price close is within 1% of EMA
 
 
