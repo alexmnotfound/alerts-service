@@ -127,21 +127,9 @@ def _check_ema_200_alert(current_ohlc, db_candle) -> Optional[str]:
             distance = abs(close - ema_value) / abs(ema_value)
         except (TypeError, ZeroDivisionError):
             continue
-        # Only send any EMA alert when price is within 1% of the EMA
-        if distance > EMA_CLOSE_TOLERANCE:
-            continue
-        if low <= ema_value <= high:
-            if close > ema_value:
-                return f"Price touched and is above EMA{period}"
-            if close < ema_value:
-                return f"Price touched and is below EMA{period}"
-            return f"Price touched EMA{period}"
-        # Within 1% but candle range did not touch EMA: say "near" / "above/below", not "crossed"
-        if close > ema_value:
-            return f"Price above EMA{period} (within 1%)"
-        if close < ema_value:
-            return f"Price below EMA{period} (within 1%)"
-        return f"Price within 1% of EMA{period} at ${ema_value:,.2f}"
+        # Only send when price is within 1% of the EMA; message is closeness only
+        if distance <= EMA_CLOSE_TOLERANCE:
+            return f"Price within 1% of EMA{period} at ${ema_value:,.2f}"
     return None
 
 

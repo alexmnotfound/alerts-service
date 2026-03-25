@@ -1,12 +1,9 @@
 import os
 import logging
-from datetime import datetime, timezone
 
 import requests
 from telegram import Bot
 from telegram.error import InvalidToken
-
-from ..config import format_utc_for_display
 
 logger = logging.getLogger(__name__)
 
@@ -44,15 +41,13 @@ except Exception as e:
 
 
 def format_consolidated_alert(ticker, alerts, current_price=None, timeframe="1h"):
-    """Format consolidated alert message for a ticker with all alerts. Time shown in GMT-3."""
+    """Format consolidated alert message for a ticker with all alerts."""
     if current_price:
         formatted_price = f"${current_price:,.2f}"
     else:
         formatted_price = "N/A"
-    now_gmt3 = format_utc_for_display(datetime.now(timezone.utc))
     formatted_message = f"""
 📊 {ticker} @ {formatted_price}
-🕐 {now_gmt3}
 ━━━━━━━━━━━━━━━━━━━━
 """
     for alert in alerts:
