@@ -52,7 +52,6 @@ def format_consolidated_alert(ticker, alerts, current_price=None, timeframe="1h"
 """
     for alert in alerts:
         formatted_message += f"• {alert}\n"
-    formatted_message += "━━━━━━━━━━━━━━━━━━━━"
     return formatted_message
 
 

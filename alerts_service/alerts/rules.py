@@ -138,9 +138,9 @@ DAILY_SMMA_99_TOLERANCE = 0.01  # 1%
 
 
 def _check_daily_smma_99_alert(current_ohlc, db_candle) -> Optional[str]:
-    """Alert when current price is within 1% of Daily SMMA 99. Only on 1d timeframe."""
+    """Alert when current price is within 1% of Daily SMMA 99. Only on 1h timeframe (same as pivots)."""
     tf = (db_candle or {}).get("timeframe") or ""
-    if str(tf).strip().lower() != "1d":
+    if str(tf).strip().lower() != "1h":
         return None
     close = current_ohlc.get("close") if current_ohlc else None
     if close is None:

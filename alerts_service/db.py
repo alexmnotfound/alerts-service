@@ -198,6 +198,39 @@ def fetch_candles_with_indicators(
     return candles
 
 
+def fetch_recent_candles_with_indicators(
+    ticker: str,
+    timeframe: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch the most recent `limit` closed candles for (ticker, timeframe), oldest first.
+    Returns list of candle dicts with indicators (same shape as fetch_latest_candle_with_indicators).
+    """
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT ticker, timeframe, timestamp, open, high, low, close, volume, candle_pattern
+                FROM ohlc_data
+                WHERE ticker = %s AND timeframe = %s
+                ORDER BY timestamp DESC
+                LIMIT %s
+                """,
+                (ticker, timeframe, limit),
+            )
+            rows = cur.fetchall()
+    if not rows:
+        return []
+    rows = list(reversed(rows))  # oldest first
+    candles = []
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            for row in rows:
+                candles.append(_build_candle_with_indicators(conn, cur, ticker, timeframe, row))
+    return candles
+
+
 def fetch_latest_timestamp(ticker: str, timeframe: str) -> Optional[Any]:
     """Return the latest candle timestamp for (ticker, timeframe), or None if no data."""
     with get_connection() as conn:

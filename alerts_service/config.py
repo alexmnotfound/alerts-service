@@ -5,7 +5,7 @@ from datetime import datetime, timezone, timedelta
 
 # List of tickers to monitor (must exist in OHLC Handler / Binance)
 TICKERS = [
-    "ARBUSDT", "ATOMUSDT", "AVAXUSDT", "BCHUSDT", "BERTUSDT", "BNBUSDT", "BTCUSDT",
+    "ARBUSDT", "ATOMUSDT", "AVAXUSDT", "BCHUSDT", "BNBUSDT", "BTCUSDT",
     "DOGEUSDT", "DOTUSDT", "ENAUSDT", "ETCUSDT", "ETHUSDT", "FILUSDT", "HBARUSDT",
     "INJUSDT", "IOTAUSDT", "LINKUSDT", "LTCUSDT", "MANAUSDT", "NEARUSDT", "NEOUSDT",
     "OPUSDT", "POLUSDT", "RENDERUSDT", "RUNEUSDT", "SANDUSDT", "SNXUSDT", "SOLUSDT",
