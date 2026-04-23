@@ -71,8 +71,7 @@ def detect_pivot_retest_short(
         return None
 
     vol_hist: deque = deque(maxlen=vol_sma_period)
-    broken: dict = {}   # level -> {"atr": float, "pivot": dict}
-    spent: set = set()
+    broken: dict = {}   # level -> {"atr": float, "pivot": dict, "bars_since": int}
     prev_close: Optional[float] = None
     current_month: int = -1
 
@@ -81,7 +80,6 @@ def detect_pivot_retest_short(
         mk = _month_key(ts)
         if mk != current_month:
             broken = {}
-            spent = set()
             current_month = mk
 
         close = float(candle["close"])
@@ -97,7 +95,10 @@ def detect_pivot_retest_short(
             for lvl in _sorted_levels(pivot):
                 if close < lvl and prev_close >= lvl and vol_pass:
                     if lvl not in broken:
-                        broken[lvl] = {"atr": atr, "pivot": pivot}
+                        broken[lvl] = {"atr": atr, "pivot": pivot, "bars_since": 0}
+
+        for lvl in list(broken):
+            broken[lvl]["bars_since"] = broken[lvl].get("bars_since", 0) + 1
 
         prev_close = close
 
@@ -107,8 +108,6 @@ def detect_pivot_retest_short(
     close_last = float(last["close"])
 
     for lvl, info in broken.items():
-        if lvl in spent:
-            continue
         atr = info["atr"]
         upper_wick = high - max(open_, close_last)
         if high >= lvl and close_last < lvl and upper_wick >= atr * wick_min_atr:
@@ -142,8 +141,7 @@ def detect_pivot_retest_long(
         return None
 
     vol_hist: deque = deque(maxlen=vol_sma_period)
-    broken: dict = {}   # level -> {"atr": float, "pivot": dict}
-    spent: set = set()
+    broken: dict = {}   # level -> {"atr": float, "pivot": dict, "bars_since": int}
     prev_close: Optional[float] = None
     current_month: int = -1
 
@@ -152,7 +150,6 @@ def detect_pivot_retest_long(
         mk = _month_key(ts)
         if mk != current_month:
             broken = {}
-            spent = set()
             current_month = mk
 
         close = float(candle["close"])
@@ -168,7 +165,10 @@ def detect_pivot_retest_long(
             for lvl in _sorted_levels(pivot):
                 if close > lvl and prev_close <= lvl and vol_pass:
                     if lvl not in broken:
-                        broken[lvl] = {"atr": atr, "pivot": pivot}
+                        broken[lvl] = {"atr": atr, "pivot": pivot, "bars_since": 0}
+
+        for lvl in list(broken):
+            broken[lvl]["bars_since"] = broken[lvl].get("bars_since", 0) + 1
 
         prev_close = close
 
@@ -178,8 +178,6 @@ def detect_pivot_retest_long(
     close_last = float(last["close"])
 
     for lvl, info in broken.items():
-        if lvl in spent:
-            continue
         atr = info["atr"]
         lower_wick = min(open_, close_last) - low
         if low <= lvl and close_last > lvl and lower_wick >= atr * wick_min_atr:
