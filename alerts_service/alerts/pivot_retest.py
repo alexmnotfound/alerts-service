@@ -51,140 +51,95 @@ def _get_atr(candle: dict) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# detect_pivot_retest_short
+# Private shared implementation
 # ---------------------------------------------------------------------------
 
-def detect_pivot_retest_short(
-    candles: list,
-    vol_mult: float = 1.5,
-    wick_min_atr: float = 0.3,
-    vol_sma_period: int = 20,
+def _detect_pivot_retest(
+    candles,
+    direction: str,  # "short" or "long"
+    vol_mult: float,
+    wick_min_atr: float,
+    vol_sma_period: int,
 ) -> Optional[str]:
-    """Return alert string if the last candle is a pivot retest short entry, else None."""
     if len(candles) < 2:
         return None
 
-    last = candles[-1]
-    pivot_last = _get_pivot(last)
-    atr_last = _get_atr(last)
-    if pivot_last is None or atr_last is None:
-        return None
-
     vol_hist: deque = deque(maxlen=vol_sma_period)
-    broken: dict = {}   # level -> {"atr": float, "pivot": dict, "bars_since": int}
+    broken: dict = {}
     prev_close: Optional[float] = None
-    current_month: int = -1
+    month_key = -1
 
     for candle in candles[:-1]:
-        ts = candle.get("timestamp")
-        mk = _month_key(ts)
-        if mk != current_month:
-            broken = {}
-            current_month = mk
-
         close = float(candle["close"])
-        volume = float(candle["volume"])
+        volume = float(candle.get("volume") or 0.0)
+        ts = candle.get("timestamp")
         vol_hist.append(volume)
-        vol_sma = sum(vol_hist) / len(vol_hist) if vol_hist else 0.0
-        vol_pass = volume > vol_mult * vol_sma
+
+        mk = _month_key(ts)
+        if mk != month_key:
+            broken = {}
+            month_key = mk
 
         pivot = _get_pivot(candle)
         atr = _get_atr(candle)
+        if pivot is None or atr is None:
+            prev_close = close
+            continue
 
-        if pivot is not None and atr is not None and prev_close is not None:
-            for lvl in _sorted_levels(pivot):
-                if close < lvl and prev_close >= lvl and vol_pass:
-                    if lvl not in broken:
-                        broken[lvl] = {"atr": atr, "pivot": pivot, "bars_since": 0}
+        levels = _sorted_levels(pivot)
+        vol_sma = sum(vol_hist) / len(vol_hist) if vol_hist else 0.0
+        vol_pass = vol_sma > 0 and volume > vol_sma * vol_mult
 
-        for lvl in list(broken):
-            broken[lvl]["bars_since"] = broken[lvl].get("bars_since", 0) + 1
+        if prev_close is not None and vol_pass:
+            for lvl in levels:
+                if lvl not in broken:
+                    if direction == "short" and close < lvl and prev_close >= lvl:
+                        broken[lvl] = {"atr": atr, "pivot": pivot}
+                    elif direction == "long" and close > lvl and prev_close <= lvl:
+                        broken[lvl] = {"atr": atr, "pivot": pivot}
 
         prev_close = close
 
-    # Check last candle for retest
+    # Check last candle
+    last = candles[-1]
+    close = float(last["close"])
     high = float(last["high"])
-    open_ = float(last["open"])
-    close_last = float(last["close"])
-
-    for lvl, info in broken.items():
-        atr = info["atr"]
-        upper_wick = high - max(open_, close_last)
-        if high >= lvl and close_last < lvl and upper_wick >= atr * wick_min_atr:
-            name = _level_name(lvl, info["pivot"])
-            return (
-                f"Pivot Retest SHORT — {name} @ {lvl:,.2f} "
-                f"| wick {upper_wick:.2f} | atr {atr:.2f}"
-            )
-
-    return None
-
-
-# ---------------------------------------------------------------------------
-# detect_pivot_retest_long
-# ---------------------------------------------------------------------------
-
-def detect_pivot_retest_long(
-    candles: list,
-    vol_mult: float = 1.5,
-    wick_min_atr: float = 0.3,
-    vol_sma_period: int = 20,
-) -> Optional[str]:
-    """Return alert string if the last candle is a pivot retest long entry, else None."""
-    if len(candles) < 2:
-        return None
-
-    last = candles[-1]
-    pivot_last = _get_pivot(last)
-    atr_last = _get_atr(last)
-    if pivot_last is None or atr_last is None:
-        return None
-
-    vol_hist: deque = deque(maxlen=vol_sma_period)
-    broken: dict = {}   # level -> {"atr": float, "pivot": dict, "bars_since": int}
-    prev_close: Optional[float] = None
-    current_month: int = -1
-
-    for candle in candles[:-1]:
-        ts = candle.get("timestamp")
-        mk = _month_key(ts)
-        if mk != current_month:
-            broken = {}
-            current_month = mk
-
-        close = float(candle["close"])
-        volume = float(candle["volume"])
-        vol_hist.append(volume)
-        vol_sma = sum(vol_hist) / len(vol_hist) if vol_hist else 0.0
-        vol_pass = volume > vol_mult * vol_sma
-
-        pivot = _get_pivot(candle)
-        atr = _get_atr(candle)
-
-        if pivot is not None and atr is not None and prev_close is not None:
-            for lvl in _sorted_levels(pivot):
-                if close > lvl and prev_close <= lvl and vol_pass:
-                    if lvl not in broken:
-                        broken[lvl] = {"atr": atr, "pivot": pivot, "bars_since": 0}
-
-        for lvl in list(broken):
-            broken[lvl]["bars_since"] = broken[lvl].get("bars_since", 0) + 1
-
-        prev_close = close
-
-    # Check last candle for retest
     low = float(last["low"])
     open_ = float(last["open"])
-    close_last = float(last["close"])
+    pivot = _get_pivot(last)
+    atr = _get_atr(last)
+    if pivot is None or atr is None:
+        return None
 
-    for lvl, info in broken.items():
-        atr = info["atr"]
-        lower_wick = min(open_, close_last) - low
-        if low <= lvl and close_last > lvl and lower_wick >= atr * wick_min_atr:
-            name = _level_name(lvl, info["pivot"])
-            return (
-                f"Pivot Retest LONG — {name} @ {lvl:,.2f} "
-                f"| wick {lower_wick:.2f} | atr {atr:.2f}"
-            )
+    levels = _sorted_levels(pivot)
+
+    if direction == "short":
+        upper_wick = high - max(open_, close)
+        for lvl in levels:
+            if lvl not in broken:
+                continue
+            if high >= lvl and close < lvl and upper_wick >= atr * wick_min_atr:
+                name = _level_name(lvl, pivot)
+                return f"Pivot Retest SHORT — {name} @ {lvl:,.2f} | wick {upper_wick:.2f} | atr {atr:.2f}"
+    else:
+        lower_wick = min(open_, close) - low
+        for lvl in levels:
+            if lvl not in broken:
+                continue
+            if low <= lvl and close > lvl and lower_wick >= atr * wick_min_atr:
+                name = _level_name(lvl, pivot)
+                return f"Pivot Retest LONG — {name} @ {lvl:,.2f} | wick {lower_wick:.2f} | atr {atr:.2f}"
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def detect_pivot_retest_short(candles, vol_mult=1.5, wick_min_atr=0.3, vol_sma_period=20):
+    return _detect_pivot_retest(candles, "short", vol_mult, wick_min_atr, vol_sma_period)
+
+
+def detect_pivot_retest_long(candles, vol_mult=1.5, wick_min_atr=0.3, vol_sma_period=20):
+    return _detect_pivot_retest(candles, "long", vol_mult, wick_min_atr, vol_sma_period)
