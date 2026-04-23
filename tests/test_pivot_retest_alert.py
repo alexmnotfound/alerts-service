@@ -72,3 +72,91 @@ def test_fetch_recent_candles_oldest_first():
 
     assert len(result) == 2
     assert result[0]["timestamp"] < result[1]["timestamp"]  # oldest first
+
+
+# ---------------------------------------------------------------------------
+# Pivot retest detection tests
+# ---------------------------------------------------------------------------
+
+def _make_candle(close, high, low, open_, volume, pivot_pp, pivot_r1, pivot_s1, atr_value, month=1):
+    from datetime import datetime
+    return {
+        "timestamp": datetime(2026, month, 1),
+        "open": float(open_),
+        "high": float(high),
+        "low": float(low),
+        "close": float(close),
+        "volume": float(volume),
+        "indicators": {
+            "pivot": {
+                "pp": pivot_pp, "r1": pivot_r1, "s1": pivot_s1,
+                "r2": None, "r3": None, "r4": None, "r5": None,
+                "s2": None, "s3": None, "s4": None, "s5": None,
+            },
+            "ce": {"atr_value": atr_value * 3.0},
+        },
+    }
+
+
+def test_no_breakdown_no_retest_short():
+    from alerts_service.alerts.pivot_retest import detect_pivot_retest_short
+    pp = 100.0
+    # All candles close above PP — no breakdown ever
+    candles = [_make_candle(close=105, high=106, low=104, open_=105, volume=1000,
+                             pivot_pp=pp, pivot_r1=115, pivot_s1=90, atr_value=2.0)
+               for _ in range(10)]
+    assert detect_pivot_retest_short(candles) is None
+
+
+def test_short_retest_fires():
+    from alerts_service.alerts.pivot_retest import detect_pivot_retest_short
+    pp = 100.0
+    atr = 2.0
+    # 20 seed candles above PP (to build vol SMA)
+    seed = [_make_candle(close=102, high=103, low=101, open_=101.5, volume=1000,
+                          pivot_pp=pp, pivot_r1=115, pivot_s1=85, atr_value=atr)
+            for _ in range(20)]
+    # Breakdown candle: prev_close=102 (>=pp=100), close=98 (<pp), high vol
+    seed[-1] = _make_candle(close=98, high=103, low=97, open_=102, volume=3000,
+                             pivot_pp=pp, pivot_r1=115, pivot_s1=85, atr_value=atr)
+    # Filler: close below PP
+    filler = _make_candle(close=96, high=98, low=95, open_=97, volume=800,
+                           pivot_pp=pp, pivot_r1=115, pivot_s1=85, atr_value=atr)
+    # Retest: high>=pp=100, close<pp, upper_wick = 101 - max(97,98) = 3 >= 0.3*2=0.6
+    retest = _make_candle(close=98, high=101, low=96, open_=97, volume=900,
+                           pivot_pp=pp, pivot_r1=115, pivot_s1=85, atr_value=atr)
+    candles = seed + [filler, retest]
+    result = detect_pivot_retest_short(candles)
+    assert result is not None
+    assert "SHORT" in result
+    assert "PP" in result
+
+
+def test_long_retest_fires():
+    from alerts_service.alerts.pivot_retest import detect_pivot_retest_long
+    pp = 100.0
+    atr = 2.0
+    # 20 seed candles below PP
+    seed = [_make_candle(close=98, high=99, low=97, open_=98, volume=1000,
+                          pivot_pp=pp, pivot_r1=115, pivot_s1=85, atr_value=atr)
+            for _ in range(20)]
+    # Breakout: prev_close=98 (<=pp=100), close=103 (>pp), high vol
+    seed[-1] = _make_candle(close=103, high=104, low=98, open_=98.5, volume=3000,
+                             pivot_pp=pp, pivot_r1=115, pivot_s1=85, atr_value=atr)
+    # Filler above PP
+    filler = _make_candle(close=105, high=106, low=104, open_=105, volume=800,
+                           pivot_pp=pp, pivot_r1=115, pivot_s1=85, atr_value=atr)
+    # Retest: low<=pp=100, close>pp, lower_wick = min(101,102)-99 = 2 >= 0.3*2=0.6
+    retest = _make_candle(close=102, high=104, low=99, open_=101, volume=900,
+                           pivot_pp=pp, pivot_r1=115, pivot_s1=85, atr_value=atr)
+    candles = seed + [filler, retest]
+    result = detect_pivot_retest_long(candles)
+    assert result is not None
+    assert "LONG" in result
+    assert "PP" in result
+
+
+def test_returns_none_if_too_few_candles():
+    from alerts_service.alerts.pivot_retest import detect_pivot_retest_short
+    assert detect_pivot_retest_short([]) is None
+    assert detect_pivot_retest_short([_make_candle(100, 101, 99, 100, 1000, 90, 110, 80, 2.0)]) is None
