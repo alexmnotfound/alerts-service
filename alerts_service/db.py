@@ -222,11 +222,11 @@ def fetch_recent_candles_with_indicators(
             rows = cur.fetchall()
     if not rows:
         return []
-    rows = list(reversed(rows))  # oldest first
+    ordered_rows = list(reversed(rows))  # oldest first
     candles = []
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            for row in rows:
+            for row in ordered_rows:
                 candles.append(_build_candle_with_indicators(conn, cur, ticker, timeframe, row))
     return candles
 
