@@ -160,3 +160,44 @@ def test_returns_none_if_too_few_candles():
     from alerts_service.alerts.pivot_retest import detect_pivot_retest_short
     assert detect_pivot_retest_short([]) is None
     assert detect_pivot_retest_short([_make_candle(100, 101, 99, 100, 1000, 90, 110, 80, 2.0)]) is None
+
+
+# ---------------------------------------------------------------------------
+# monitor.py integration tests
+# ---------------------------------------------------------------------------
+
+def _import_monitor_with_telegram_mocked():
+    """Import alerts_service.monitor with telegram stubbed out (not installed in test env)."""
+    import sys
+    from unittest.mock import MagicMock
+    # Stub telegram before monitor is imported so notifier.py doesn't blow up
+    for mod in ("telegram", "telegram.ext", "telegram.error"):
+        if mod not in sys.modules:
+            sys.modules[mod] = MagicMock()
+    # Force re-import in case monitor was cached from a failed attempt
+    sys.modules.pop("alerts_service.monitor", None)
+    import alerts_service.monitor as monitor_mod
+    return monitor_mod
+
+
+def test_process_ticker_pivot_retest_no_candles():
+    """Should return without error when no candles available."""
+    from unittest.mock import patch
+    monitor_mod = _import_monitor_with_telegram_mocked()
+    with patch.object(monitor_mod, "fetch_recent_candles_with_indicators", return_value=[]):
+        monitor_mod.process_ticker_pivot_retest("BTCUSDT")  # should not raise
+
+
+def test_process_ticker_pivot_retest_sends_alert():
+    """Should call send_consolidated_alert when a retest is detected."""
+    from unittest.mock import patch, MagicMock
+    fake_candles = [{"close": 90000.0}] * 50
+    monitor_mod = _import_monitor_with_telegram_mocked()
+
+    with patch.object(monitor_mod, "fetch_recent_candles_with_indicators", return_value=fake_candles), \
+         patch.object(monitor_mod, "detect_pivot_retest_short", return_value="Pivot Retest SHORT — PP @ 90,000.00 | wick 100.00 | atr 500.00"), \
+         patch.object(monitor_mod, "detect_pivot_retest_long", return_value=None), \
+         patch.object(monitor_mod, "send_consolidated_alert") as mock_send, \
+         patch.object(monitor_mod, "_apply_cooldown", return_value=(["Pivot Retest SHORT — PP @ 90,000.00 | wick 100.00 | atr 500.00"], {("1h", "pivot_retest_short")})):
+        monitor_mod.process_ticker_pivot_retest("BTCUSDT")
+    mock_send.assert_called_once()

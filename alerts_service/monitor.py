@@ -19,9 +19,11 @@ from .config import (
 )
 from .db import (
     fetch_latest_candle_with_indicators,
+    fetch_recent_candles_with_indicators,
     check_connection as db_check_connection,
     get_db_config,
 )
+from .alerts.pivot_retest import detect_pivot_retest_short, detect_pivot_retest_long
 from .binance_client import fetch_current_ohlc
 from .alerts.rules import (
     run_price_rules,
@@ -200,6 +202,43 @@ def process_ticker_candle_pattern(ticker: str) -> None:
                 _last_alert_sent[(ticker, tf, rule_id)] = now_utc
 
 
+PIVOT_RETEST_LOOKBACK = 50  # 1h candles (~2 days of history for breakdown detection)
+
+
+def process_ticker_pivot_retest(ticker: str) -> None:
+    """Pivot retest pass: runs after each 1h close. Replays breakdown logic over last 50 candles."""
+    try:
+        candles = fetch_recent_candles_with_indicators(ticker, "1h", limit=PIVOT_RETEST_LOOKBACK)
+    except Exception as e:
+        logger.error(f"fetch_recent_candles {ticker}: {e}")
+        return
+    if len(candles) < 2:
+        return
+
+    alerts = []
+    for detect_fn, rule_id in [
+        (detect_pivot_retest_short, "pivot_retest_short"),
+        (detect_pivot_retest_long, "pivot_retest_long"),
+    ]:
+        try:
+            msg = detect_fn(candles)
+            if msg:
+                alerts.append(("1h", msg, rule_id))
+        except Exception as e:
+            logger.error(f"pivot_retest rule {rule_id} {ticker}: {e}")
+
+    if not alerts:
+        return
+
+    now_utc = datetime.now(timezone.utc)
+    allowed, sent_keys = _apply_cooldown(ticker, alerts, now_utc)
+    if allowed:
+        current_price = float(candles[-1]["close"])
+        send_consolidated_alert(ticker, allowed, current_price, "MULTI")
+        for tf, rule_id in sent_keys:
+            _last_alert_sent[(ticker, tf, rule_id)] = now_utc
+
+
 def main():
     logger.info("Starting alerts service...")
     logger.info(f"Tickers: {', '.join(TICKERS)}")
@@ -222,6 +261,11 @@ def main():
                     process_ticker_candle_pattern(ticker)
                 except Exception as e:
                     logger.error(f"Error candle pattern {ticker}: {e}")
+                if is_within_1_min_after_close("1h"):
+                    try:
+                        process_ticker_pivot_retest(ticker)
+                    except Exception as e:
+                        logger.error(f"Error pivot retest {ticker}: {e}")
                 time.sleep(2)
             # Price pass (pivot 1h + EMA200 1h/4h/1d/1M): every CHECK_INTERVAL
             if now - last_price_pass >= CHECK_INTERVAL:
