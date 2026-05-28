@@ -15,6 +15,7 @@ from .config import (
     STALE_DATA_SECONDS_DEFAULT,
     ALERT_COOLDOWN_SECONDS,
     CANDLE_PATTERN_CHECK_INTERVAL,
+    CANDLE_PATTERN_TIMEFRAMES,
     is_within_1_min_after_close,
 )
 from .db import (
@@ -173,7 +174,7 @@ def process_ticker_candle_pattern(ticker: str) -> None:
     """Candle-pattern pass: all TFs where we're within 1 min after candle close. Doji etc. Run every CANDLE_PATTERN_CHECK_INTERVAL."""
     timeframe_alerts = []
     current_price = None
-    for timeframe in TIMEFRAMES:
+    for timeframe in CANDLE_PATTERN_TIMEFRAMES:
         if not is_within_1_min_after_close(timeframe):
             continue
         try:
@@ -261,11 +262,12 @@ def main():
                     process_ticker_candle_pattern(ticker)
                 except Exception as e:
                     logger.error(f"Error candle pattern {ticker}: {e}")
-                if is_within_1_min_after_close("1h"):
-                    try:
-                        process_ticker_pivot_retest(ticker)
-                    except Exception as e:
-                        logger.error(f"Error pivot retest {ticker}: {e}")
+                # pivot retest disabled
+                # if is_within_1_min_after_close("1h"):
+                #     try:
+                #         process_ticker_pivot_retest(ticker)
+                #     except Exception as e:
+                #         logger.error(f"Error pivot retest {ticker}: {e}")
                 time.sleep(2)
             # Price pass (pivot 1h + EMA200 1h/4h/1d/1M): every CHECK_INTERVAL
             if now - last_price_pass >= CHECK_INTERVAL:

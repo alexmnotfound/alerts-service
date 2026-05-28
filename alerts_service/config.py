@@ -20,6 +20,8 @@ OHLC_API_BASE_URL = os.getenv("OHLC_API_BASE_URL", "http://localhost:8000")
 TIMEFRAMES = ["1h", "4h", "1d", "1w", "1M"]
 # Timeframes for price pass: 1h (pivot only), 4h/1d/1w/1M (EMA200 + pivot on 1h; daily_smma_99 on 1d)
 PRICE_PASS_TIMEFRAMES = ["1h", "4h", "1d", "1w", "1M"]
+# Timeframes for candle pattern alerts (Doji, Tweezer Top/Bottom): skip 1h and 1w, too noisy
+CANDLE_PATTERN_TIMEFRAMES = ["4h", "1d", "1M"]
 
 # How often to run a full check (fetch Binance price + DB indicators + run rules). Shorter = faster alerts.
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", os.getenv("HOURLY_CHECK_INTERVAL", "300")))  # default 5 min

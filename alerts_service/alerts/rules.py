@@ -95,8 +95,8 @@ def _check_tweezer_bottom_alert(current_ohlc, db_candle) -> Optional[str]:
     return TWEEZER_BOTTOM_ALERT_MESSAGE
 
 
-# EMA200 only, on 4h, 1d, 1w, 1M (no 1h)
-EMA_TIMEFRAMES = ("4h", "1d", "1w", "1M")
+# EMA200 only, on 4h, 1d, 1M (no 1h or 1w)
+EMA_TIMEFRAMES = ("4h", "1d", "1M")
 EMA_PERIODS = (200,)
 EMA_CLOSE_TOLERANCE = 0.01  # 1%: alert when price close is within 1% of EMA
 
@@ -159,7 +159,8 @@ def _check_daily_smma_99_alert(current_ohlc, db_candle) -> Optional[str]:
 
 # (rule_fn, rule_id) so cooldown can be applied per rule (e.g. EMA vs PIVOT separately).
 RULES_PRICE = [
-    (_check_pivot_alert, "pivot"),
+    # pivot disabled
+    # (_check_pivot_alert, "pivot"),
     (_check_ema_200_alert, "ema_200"),
     (_check_daily_smma_99_alert, "daily_smma_99"),
 ]
