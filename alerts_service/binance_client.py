@@ -3,6 +3,7 @@ Sync Binance client for fetching current OHLC (klines).
 Used to get live price/candle to compare with TA indicators from the DB.
 """
 
+import json
 import logging
 import time
 from typing import List, Optional, Dict, Any
@@ -55,7 +56,6 @@ def fetch_current_ohlc(symbol: str, timeframe: str) -> Optional[Dict[str, Any]]:
     raw = get_klines(symbol, timeframe, limit=2)
     if not raw:
         return None
-    # Use last candle (most recent)
     k = raw[-1]
     try:
         return {
@@ -68,3 +68,25 @@ def fetch_current_ohlc(symbol: str, timeframe: str) -> Optional[Dict[str, Any]]:
     except (IndexError, TypeError, ValueError) as e:
         logger.warning(f"Parse Binance kline failed: {e}")
         return None
+
+
+def fetch_all_prices(symbols: List[str]) -> Dict[str, float]:
+    """Fetch current prices for all symbols in one Binance API call.
+
+    Uses /ticker/price?symbols=[...] — one HTTP request regardless of how many symbols.
+    Returns {symbol: price_float}. Empty dict on failure.
+    """
+    if not symbols:
+        return {}
+    url = f"{BINANCE_BASE_URL}/ticker/price?symbols={json.dumps(symbols, separators=(',', ':'))}"
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+            if resp.status_code == 200:
+                return {item["symbol"]: float(item["price"]) for item in resp.json()}
+            logger.warning(f"Binance batch prices: HTTP {resp.status_code}")
+        except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+            logger.warning(f"Binance batch prices attempt {attempt + 1}: {e}")
+        if attempt < MAX_RETRIES - 1:
+            time.sleep(RETRY_DELAY)
+    return {}

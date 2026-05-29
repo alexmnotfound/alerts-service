@@ -2,7 +2,7 @@ import time
 import requests
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 from .config import (
     TICKERS,
@@ -20,12 +20,13 @@ from .config import (
 )
 from .db import (
     fetch_latest_candle_with_indicators,
+    fetch_latest_candles_batch,
     fetch_recent_candles_with_indicators,
     check_connection as db_check_connection,
     get_db_config,
 )
 from .alerts.pivot_retest import detect_pivot_retest_short, detect_pivot_retest_long
-from .binance_client import fetch_current_ohlc
+from .binance_client import fetch_all_prices, fetch_current_ohlc
 from .alerts.rules import (
     run_price_rules,
     run_candle_pattern_rules,
@@ -147,60 +148,97 @@ def _ensure_candle(ticker: str, timeframe: str) -> Optional[Dict[str, Any]]:
     return candle
 
 
-def process_ticker_price(ticker: str, timeframe: str) -> None:
-    """Price pass: Pivot (1h only) + EMA200. Run for each PRICE_PASS_TIMEFRAMES."""
-    candle = _ensure_candle(ticker, timeframe)
-    if not candle:
-        return
-    current_ohlc = fetch_current_ohlc(ticker, timeframe)
-    if not current_ohlc:
-        return
-    try:
-        alerts = run_price_rules(current_ohlc, candle)
-        if not alerts:
-            return
-        now_utc = datetime.now(timezone.utc)
-        timeframe_alerts = [(timeframe, msg, rule_id) for msg, rule_id in alerts]
-        all_alerts, sent_keys = _apply_cooldown(ticker, timeframe_alerts, now_utc)
-        if all_alerts:
-            send_consolidated_alert(ticker, all_alerts, current_ohlc.get("close"), "MULTI")
-            for tf, rule_id in sent_keys:
-                _last_alert_sent[(ticker, tf, rule_id)] = now_utc
-    except Exception as e:
-        logger.error(f"Error price rules {ticker} {timeframe}: {e}")
+def _build_candles_map_with_fallback(
+    pairs: list,
+) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """Batch-fetch candles. Trigger one OHLC update per stale timeframe, then re-fetch once."""
+    candles_map = fetch_latest_candles_batch(pairs)
+
+    stale_timeframes = {
+        timeframe
+        for ticker, timeframe in pairs
+        if not candles_map.get((ticker, timeframe)) or is_data_stale(candles_map.get((ticker, timeframe)), timeframe)
+    }
+
+    if stale_timeframes:
+        for timeframe in stale_timeframes:
+            logger.warning(f"Stale/missing data for timeframe {timeframe}. Triggering bulk update...")
+            trigger_ohlc_update_timeframe(timeframe)
+        time.sleep(5)
+        candles_map = fetch_latest_candles_batch(pairs)
+
+    return candles_map
 
 
-def process_ticker_candle_pattern(ticker: str) -> None:
-    """Candle-pattern pass: all TFs where we're within 1 min after candle close. Doji etc. Run every CANDLE_PATTERN_CHECK_INTERVAL."""
-    timeframe_alerts = []
-    current_price = None
-    for timeframe in CANDLE_PATTERN_TIMEFRAMES:
-        if not is_within_1_min_after_close(timeframe):
+def _run_price_pass(prices: Dict[str, float]) -> None:
+    """Price rules for all tickers/timeframes: EMA200 + SMMA99.
+    One batch DB fetch + pre-fetched prices dict (no per-ticker Binance calls).
+    """
+    pairs = [(t, tf) for t in TICKERS for tf in PRICE_PASS_TIMEFRAMES]
+    candles_map = _build_candles_map_with_fallback(pairs)
+
+    now_utc = datetime.now(timezone.utc)
+    for ticker in TICKERS:
+        price = prices.get(ticker)
+        if not price:
             continue
-        try:
-            candle = _ensure_candle(ticker, timeframe)
+        current_ohlc = {"open": price, "high": price, "low": price, "close": price, "volume": None}
+        timeframe_alerts = []
+        for timeframe in PRICE_PASS_TIMEFRAMES:
+            candle = candles_map.get((ticker, timeframe))
             if not candle:
                 continue
-            current_ohlc = fetch_current_ohlc(ticker, timeframe)
-            if not current_ohlc:
-                time.sleep(1)
+            try:
+                alerts = run_price_rules(current_ohlc, candle)
+                for msg, rule_id in alerts:
+                    timeframe_alerts.append((timeframe, msg, rule_id))
+            except Exception as e:
+                logger.error(f"Error price rules {ticker} {timeframe}: {e}")
+
+        if timeframe_alerts:
+            all_alerts, sent_keys = _apply_cooldown(ticker, timeframe_alerts, now_utc)
+            if all_alerts:
+                send_consolidated_alert(ticker, all_alerts, price, "MULTI")
+                for tf, rule_id in sent_keys:
+                    _last_alert_sent[(ticker, tf, rule_id)] = now_utc
+
+
+def _run_candle_pattern_pass(prices: Dict[str, float]) -> None:
+    """Candle-pattern rules (Doji, Tweezer) for timeframes currently within 1 min of close.
+    One batch DB fetch + pre-fetched prices dict (no per-ticker Binance calls).
+    """
+    active_tfs = [tf for tf in CANDLE_PATTERN_TIMEFRAMES if is_within_1_min_after_close(tf)]
+    if not active_tfs:
+        return
+
+    pairs = [(t, tf) for t in TICKERS for tf in active_tfs]
+    candles_map = _build_candles_map_with_fallback(pairs)
+
+    now_utc = datetime.now(timezone.utc)
+    for ticker in TICKERS:
+        price = prices.get(ticker)
+        if not price:
+            continue
+        current_ohlc = {"open": price, "high": price, "low": price, "close": price, "volume": None}
+        timeframe_alerts = []
+        for timeframe in active_tfs:
+            candle = candles_map.get((ticker, timeframe))
+            if not candle:
                 continue
-            if current_price is None:
-                current_price = current_ohlc.get("close")
-            alerts = run_candle_pattern_rules(current_ohlc, candle)
-            alerts = _filter_candle_pattern_dedupe(ticker, timeframe, candle, alerts)
-            for msg, rule_id in alerts:
-                timeframe_alerts.append((timeframe, msg, rule_id))
-        except Exception as e:
-            logger.error(f"Error candle pattern {ticker} {timeframe}: {e}")
-        time.sleep(1)
-    if timeframe_alerts:
-        now_utc = datetime.now(timezone.utc)
-        all_alerts, sent_keys = _apply_cooldown(ticker, timeframe_alerts, now_utc)
-        if all_alerts:
-            send_consolidated_alert(ticker, all_alerts, current_price or 0, "MULTI")
-            for tf, rule_id in sent_keys:
-                _last_alert_sent[(ticker, tf, rule_id)] = now_utc
+            try:
+                alerts = run_candle_pattern_rules(current_ohlc, candle)
+                alerts = _filter_candle_pattern_dedupe(ticker, timeframe, candle, alerts)
+                for msg, rule_id in alerts:
+                    timeframe_alerts.append((timeframe, msg, rule_id))
+            except Exception as e:
+                logger.error(f"Error candle pattern {ticker} {timeframe}: {e}")
+
+        if timeframe_alerts:
+            all_alerts, sent_keys = _apply_cooldown(ticker, timeframe_alerts, now_utc)
+            if all_alerts:
+                send_consolidated_alert(ticker, all_alerts, price, "MULTI")
+                for tf, rule_id in sent_keys:
+                    _last_alert_sent[(ticker, tf, rule_id)] = now_utc
 
 
 PIVOT_RETEST_LOOKBACK = 50  # 1h candles (~2 days of history for breakdown detection)
@@ -256,29 +294,36 @@ def main():
     while True:
         try:
             now = time.time()
-            # Candle-pattern pass: every 1 min, only for TFs in the 1-min-after-close window
-            for ticker in TICKERS:
-                try:
-                    process_ticker_candle_pattern(ticker)
-                except Exception as e:
-                    logger.error(f"Error candle pattern {ticker}: {e}")
-                # pivot retest disabled
-                # if is_within_1_min_after_close("1h"):
-                #     try:
-                #         process_ticker_pivot_retest(ticker)
-                #     except Exception as e:
-                #         logger.error(f"Error pivot retest {ticker}: {e}")
-                time.sleep(2)
-            # Price pass (pivot 1h + EMA200 1h/4h/1d/1M): every CHECK_INTERVAL
+
+            # Single Binance call for all tickers — shared by both passes this cycle
+            prices = fetch_all_prices(TICKERS)
+            if not prices:
+                logger.warning("Binance price fetch failed, retrying...")
+                time.sleep(RETRY_INTERVAL)
+                continue
+
+            # Candle-pattern pass: every cycle, fires only for TFs within 1 min of close
+            try:
+                _run_candle_pattern_pass(prices)
+            except Exception as e:
+                logger.error(f"Candle pattern pass error: {e}")
+
+            # pivot retest disabled
+            # if is_within_1_min_after_close("1h"):
+            #     for ticker in TICKERS:
+            #         try:
+            #             process_ticker_pivot_retest(ticker)
+            #         except Exception as e:
+            #             logger.error(f"Error pivot retest {ticker}: {e}")
+
+            # Price pass (EMA200 + SMMA99): every CHECK_INTERVAL
             if now - last_price_pass >= CHECK_INTERVAL:
                 last_price_pass = now
-                for ticker in TICKERS:
-                    for timeframe in PRICE_PASS_TIMEFRAMES:
-                        try:
-                            process_ticker_price(ticker, timeframe)
-                        except Exception as e:
-                            logger.error(f"Error price pass {ticker} {timeframe}: {e}")
-                        time.sleep(2)
+                try:
+                    _run_price_pass(prices)
+                except Exception as e:
+                    logger.error(f"Price pass error: {e}")
+
             time.sleep(CANDLE_PATTERN_CHECK_INTERVAL)
         except KeyboardInterrupt:
             logger.info("Service stopped by user")

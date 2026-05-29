@@ -1,5 +1,8 @@
 import os
+import time
+import hashlib
 import logging
+import threading
 
 import requests
 from telegram import Bot
@@ -7,21 +10,21 @@ from telegram.error import InvalidToken
 
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file (project root)
+
 def load_env():
+    """Load .env file as fallback for local runs. Docker env vars take precedence."""
     try:
         with open(".env") as f:
             for line in f:
                 if "=" in line and not line.startswith("#"):
                     key, value = line.strip().split("=", 1)
-                    os.environ[key] = value
+                    os.environ.setdefault(key, value)
     except FileNotFoundError:
         pass
 
 
 load_env()
 
-# Initialize bot and chat_id with error handling
 bot = None
 chat_id = None
 
@@ -78,7 +81,7 @@ def _send_telegram_sync(text: str) -> bool:
 
 
 def send_consolidated_alert(ticker, alerts, current_price=None, timeframe="1h", footer=None):
-    """Send consolidated alert for a ticker with all its alerts. Optional footer (e.g. 'This is a test message')."""
+    """Send consolidated alert for a ticker with all its alerts. Optional footer."""
     if not bot or not chat_id:
         logger.info(f"Alert (Telegram not configured) for {ticker}: {alerts}")
         return
@@ -122,3 +125,66 @@ def send_alert(message):
     else:
         logger.error(f"Alert NOT sent (send failed): {message}")
         logger.info(f"Alert (not sent): {message}")
+
+
+class TelegramErrorHandler(logging.Handler):
+    """Forwards ERROR+ log records to Telegram. Rate-limits identical messages to avoid spam."""
+
+    _last_sent: dict = {}
+    _COOLDOWN = 60
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if not bot or not chat_id:
+                return
+            msg = self.format(record)
+            key = hashlib.md5(msg.encode()).hexdigest()
+            now = time.monotonic()
+            if now - TelegramErrorHandler._last_sent.get(key, 0) < self._COOLDOWN:
+                return
+            TelegramErrorHandler._last_sent[key] = now
+            _send_telegram_sync(msg)
+        except Exception:
+            pass
+
+
+def setup_telegram_logging(level: int = logging.ERROR) -> None:
+    """Attach TelegramErrorHandler to the root logger. Call once at startup."""
+    handler = TelegramErrorHandler(level=level)
+    handler.setFormatter(logging.Formatter("🚨 %(levelname)s [%(name)s]\n%(message)s"))
+    logging.getLogger().addHandler(handler)
+
+
+def _poll_commands(help_text: str) -> None:
+    """Background thread: long-poll Telegram for /help and /start commands."""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        return
+    offset = 0
+    url_updates = f"https://api.telegram.org/bot{bot_token}/getUpdates"
+    url_send = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    while True:
+        try:
+            r = requests.get(url_updates, params={"offset": offset, "timeout": 30}, timeout=35)
+            if r.status_code != 200:
+                time.sleep(5)
+                continue
+            for update in r.json().get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message", {})
+                text = msg.get("text", "")
+                chat = msg.get("chat", {}).get("id")
+                if chat and (text.startswith("/help") or text.startswith("/start")):
+                    requests.post(url_send, json={"chat_id": chat, "text": help_text}, timeout=15)
+        except Exception as e:
+            logger.warning(f"Command listener error: {e}")
+            time.sleep(5)
+
+
+def start_command_listener(help_text: str) -> None:
+    """Start background thread that handles /help and /start bot commands."""
+    if not os.getenv("TELEGRAM_BOT_TOKEN"):
+        return
+    t = threading.Thread(target=_poll_commands, args=(help_text,), daemon=True)
+    t.start()
+    logger.info("Telegram command listener started")

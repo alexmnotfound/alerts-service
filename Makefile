@@ -9,7 +9,7 @@ build:
 up:
 	docker compose up -d
 
-recreate:
+recreate: build
 	docker compose up -d --force-recreate
 
 down:
