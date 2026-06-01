@@ -1,15 +1,18 @@
 # Alerts service. Copy .env.example to .env and set DB_*, OHLC_API_BASE_URL, Telegram.
 
-.PHONY: build up down logs recreate run install test clean
+.PHONY: build up down logs recreate network run install test clean
 
 # Docker (same targets as ohlc_handler)
+network:
+	docker network create mrcap-net 2>/dev/null || true
+
 build:
 	docker compose build
 
-up:
+up: network
 	docker compose up -d
 
-recreate: build
+recreate: network build
 	docker compose up -d --force-recreate
 
 down:
