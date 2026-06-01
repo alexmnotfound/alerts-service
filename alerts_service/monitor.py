@@ -84,14 +84,14 @@ def trigger_ohlc_update_timeframe(timeframe: str) -> bool:
     """POST /timeframe/{timeframe}/update — update all symbols for one timeframe."""
     url = f"{OHLC_API_BASE_URL}/timeframe/{timeframe}/update"
     try:
-        response = requests.post(url, timeout=120)
+        response = requests.post(url, timeout=240)
         if response.status_code == 200:
             logger.info(f"Triggered OHLC update for timeframe {timeframe}")
             return True
         logger.warning(f"OHLC update {timeframe}: HTTP {response.status_code}")
         return False
     except requests.exceptions.RequestException as e:
-        logger.error(f"OHLC update {timeframe}: {e}")
+        logger.warning(f"OHLC update {timeframe}: {e}")
         return False
 
 
@@ -99,14 +99,14 @@ def trigger_ohlc_update_symbol_timeframe(symbol: str, timeframe: str) -> bool:
     """POST /update/{symbol}/{timeframe} — update one symbol + timeframe."""
     url = f"{OHLC_API_BASE_URL}/update/{symbol}/{timeframe}"
     try:
-        response = requests.post(url, timeout=120)
+        response = requests.post(url, timeout=240)
         if response.status_code == 200:
             logger.info(f"Triggered OHLC update for {symbol} {timeframe}")
             return True
         logger.warning(f"OHLC update {symbol} {timeframe}: HTTP {response.status_code}")
         return False
     except requests.exceptions.RequestException as e:
-        logger.error(f"OHLC update {symbol} {timeframe}: {e}")
+        logger.warning(f"OHLC update {symbol} {timeframe}: {e}")
         return False
 
 
