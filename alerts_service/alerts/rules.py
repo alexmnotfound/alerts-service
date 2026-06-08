@@ -96,7 +96,7 @@ def _check_tweezer_bottom_alert(current_ohlc, db_candle) -> Optional[str]:
 
 
 # EMA200 only, on 4h, 1d, 1M (no 1h or 1w)
-EMA_TIMEFRAMES = ("4h", "1d", "1M")
+EMA_TIMEFRAMES = ("4h", "1d", "1m")
 EMA_PERIODS = (200,)
 EMA_CLOSE_TOLERANCE = 0.01  # 1%: alert when price close is within 1% of EMA
 
@@ -124,10 +124,10 @@ def _check_ema_200_alert(current_ohlc, db_candle) -> Optional[str]:
         if ema_value <= 0:
             continue
         try:
-            distance = abs(close - ema_value) / abs(ema_value)
+            ohlc_values = [v for v in [close, high, low] if v is not None]
+            distance = min(abs(v - ema_value) / abs(ema_value) for v in ohlc_values)
         except (TypeError, ZeroDivisionError):
             continue
-        # Only send when price is within 1% of the EMA; message is closeness only
         if distance <= EMA_CLOSE_TOLERANCE:
             return f"Price within 1% of EMA{period} at ${ema_value:,.2f}"
     return None
@@ -138,18 +138,23 @@ DAILY_SMMA_99_TOLERANCE = 0.01  # 1%
 
 
 def _check_daily_smma_99_alert(current_ohlc, db_candle) -> Optional[str]:
-    """Alert when current price is within 1% of Daily SMMA 99. Only on 1h timeframe (same as pivots)."""
+    """Alert when price (or 5m high/low) is within 1% of Daily SMMA 99. Only on 1h timeframe."""
     tf = (db_candle or {}).get("timeframe") or ""
     if str(tf).strip().lower() != "1h":
         return None
-    close = current_ohlc.get("close") if current_ohlc else None
+    if not current_ohlc:
+        return None
+    close = current_ohlc.get("close")
+    high = current_ohlc.get("high")
+    low = current_ohlc.get("low")
     if close is None:
         return None
     smma = ((db_candle or {}).get("indicators") or {}).get("daily_smma_99")
     if smma is None or smma <= 0:
         return None
     try:
-        distance = abs(close - smma) / abs(smma)
+        ohlc_values = [v for v in [close, high, low] if v is not None]
+        distance = min(abs(v - smma) / abs(smma) for v in ohlc_values)
         if distance <= DAILY_SMMA_99_TOLERANCE:
             return f"Price within 1% of Daily SMMA 99 at ${smma:,.2f}"
     except (TypeError, ZeroDivisionError):

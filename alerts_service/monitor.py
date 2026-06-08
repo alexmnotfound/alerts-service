@@ -26,7 +26,7 @@ from .db import (
     get_db_config,
 )
 from .alerts.pivot_retest import detect_pivot_retest_short, detect_pivot_retest_long
-from .binance_client import fetch_all_prices, fetch_current_ohlc
+from .binance_client import fetch_all_prices, fetch_current_ohlc, fetch_all_5m_klines
 from .alerts.rules import (
     run_price_rules,
     run_candle_pattern_rules,
@@ -48,6 +48,36 @@ CANDLE_PATTERN_RULE_IDS = frozenset({"doji", "tweezer_top", "tweezer_bottom"})
 
 # Per (ticker, timeframe, rule_id): last time we sent this alert type (UTC). Cooldown is per rule.
 _last_alert_sent: Dict[tuple, datetime] = {}
+
+# Log a warning when price gets this close to an indicator but not close enough to alert (1%).
+NEAR_MISS_THRESHOLD = 0.015  # 1.5%
+
+
+def _log_near_miss(ticker: str, timeframe: str, current_ohlc: Dict, candle: Dict) -> None:
+    """Warn when price is between 1% and 1.5% of an indicator (no alert fired, but close)."""
+    indicators = (candle or {}).get("indicators") or {}
+    if not current_ohlc:
+        return
+    ohlc_values = [v for v in [current_ohlc.get("close"), current_ohlc.get("high"), current_ohlc.get("low")] if v is not None]
+    if not ohlc_values:
+        return
+
+    def _check(label: str, level: float) -> None:
+        if not level or level <= 0:
+            return
+        try:
+            dist = min(abs(v - level) / level for v in ohlc_values)
+            if 0.01 < dist <= NEAR_MISS_THRESHOLD:
+                logger.warning(f"Near miss {ticker} [{timeframe}] {label}: {dist*100:.2f}% away (threshold 1%)")
+        except (TypeError, ZeroDivisionError):
+            pass
+
+    if str(timeframe).lower() == "1h":
+        _check("Daily SMMA 99", indicators.get("daily_smma_99"))
+
+    if str(timeframe).lower() in ("4h", "1d", "1m"):
+        ema = indicators.get("ema") or {}
+        _check("EMA200", ema.get("200"))
 
 
 def _apply_cooldown(ticker: str, timeframe_alerts: list, now_utc: datetime):
@@ -172,17 +202,20 @@ def _build_candles_map_with_fallback(
 
 def _run_price_pass(prices: Dict[str, float]) -> None:
     """Price rules for all tickers/timeframes: EMA200 + SMMA99.
-    One batch DB fetch + pre-fetched prices dict (no per-ticker Binance calls).
+    Fetches 5m OHLC from Binance so high/low of the current 5m candle are used — catches
+    rapid spikes that a single price snapshot would miss.
     """
     pairs = [(t, tf) for t in TICKERS for tf in PRICE_PASS_TIMEFRAMES]
     candles_map = _build_candles_map_with_fallback(pairs)
+    five_min_ohlc = fetch_all_5m_klines(TICKERS)
 
     now_utc = datetime.now(timezone.utc)
     for ticker in TICKERS:
         price = prices.get(ticker)
         if not price:
             continue
-        current_ohlc = {"open": price, "high": price, "low": price, "close": price, "volume": None}
+        ohlc_5m = five_min_ohlc.get(ticker)
+        current_ohlc = ohlc_5m if ohlc_5m else {"open": price, "high": price, "low": price, "close": price, "volume": None}
         timeframe_alerts = []
         for timeframe in PRICE_PASS_TIMEFRAMES:
             candle = candles_map.get((ticker, timeframe))
@@ -192,6 +225,8 @@ def _run_price_pass(prices: Dict[str, float]) -> None:
                 alerts = run_price_rules(current_ohlc, candle)
                 for msg, rule_id in alerts:
                     timeframe_alerts.append((timeframe, msg, rule_id))
+                if not alerts:
+                    _log_near_miss(ticker, timeframe, current_ohlc, candle)
             except Exception as e:
                 logger.error(f"Error price rules {ticker} {timeframe}: {e}")
 

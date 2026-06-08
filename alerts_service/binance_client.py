@@ -6,6 +6,7 @@ Used to get live price/candle to compare with TA indicators from the DB.
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Dict, Any
 
 import requests
@@ -90,3 +91,38 @@ def fetch_all_prices(symbols: List[str]) -> Dict[str, float]:
         if attempt < MAX_RETRIES - 1:
             time.sleep(RETRY_DELAY)
     return {}
+
+
+def fetch_all_5m_klines(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Fetch the current (forming) 5m kline for all symbols in parallel.
+
+    Returns {symbol: {open, high, low, close, volume}}. Missing symbols are absent.
+    Uses the last kline (limit=1) which is the currently-forming 5m candle — its high/low
+    capture the full price range since the last 5m boundary.
+    """
+    if not symbols:
+        return {}
+
+    def _fetch_one(symbol: str):
+        raw = get_klines(symbol, "5m", limit=1)
+        if not raw:
+            return symbol, None
+        k = raw[-1]
+        try:
+            return symbol, {
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4]),
+                "volume": float(k[5]),
+            }
+        except (IndexError, TypeError, ValueError) as e:
+            logger.warning(f"Parse 5m kline {symbol}: {e}")
+            return symbol, None
+
+    result: Dict[str, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        for symbol, ohlc in executor.map(_fetch_one, symbols):
+            if ohlc:
+                result[symbol] = ohlc
+    return result
